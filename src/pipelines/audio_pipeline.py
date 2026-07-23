@@ -44,9 +44,9 @@ class AudioPipeline:
         export_report: bool = True,
     ) -> tuple[AudioAnalysisReport, list[AudioAlert]]:
         audio_path = Path(audio_path)
-        logger.info(
-            f"=== Pipeline de Áudio: {audio_path.name} ({consultation_type.value}) ==="
-        )
+        #logger.info(
+        #    f"=== Pipeline de Áudio: {audio_path.name} ({consultation_type.value}) ==="
+        #)
 
         report, alerts = self.agent.analyze(
             audio_path=audio_path,

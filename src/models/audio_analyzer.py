@@ -14,9 +14,14 @@ from __future__ import annotations
 
 import io
 import tempfile
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+# Suprime avisos desnecessários do HuggingFace / PyTorch / Librosa no terminal
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 import librosa
 import numpy as np
@@ -24,9 +29,14 @@ import soundfile as sf
 import torch
 import whisper
 from loguru import logger
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 from transformers import AutoModelForAudioClassification, AutoFeatureExtractor, pipeline
 
 from src.config import settings
+
+console = Console()
 
 EMOTION_LABELS = {
     "neutral": "neutro",
@@ -110,7 +120,7 @@ class AudioAnalysisReport:
 
     @property
     def has_alerts(self) -> bool:
-        return self.risk_level in ("alto", "crítico")
+        return self.risk_level.lower() in ("alto", "crítico", "médio")
 
     @property
     def sentiment_summary(self) -> dict[str, int]:
@@ -174,7 +184,7 @@ class SpeechToText:
     @property
     def model(self):
         if self._model is None:
-            logger.info(f"Carregando Whisper {self.model_size}...")
+            #logger.info(f"🎙️ Carregando Whisper [cyan]{self.model_size}[/cyan] ({settings.device.upper()})...")
             self._model = whisper.load_model(self.model_size)
             self._model.to(torch.device(settings.device))
         return self._model
@@ -183,11 +193,14 @@ class SpeechToText:
         """Transcreve áudio completo e detecta indicadores de risco no texto."""
         audio_path = Path(audio_path)
 
+        # Força fp16=False se estiver rodando em CPU para evitar avisos
+        use_fp16 = True if settings.device == "cuda" else False
+
         result = self.model.transcribe(
             str(audio_path),
             language=self.language,
             verbose=False,
-            word_timestamps=True,
+            fp16=use_fp16,
         )
 
         segments: list[TranscriptionSegment] = []
@@ -235,7 +248,7 @@ class EmotionAnalyzer:
     def _ensure_loaded(self):
         if self._feature_extractor is None:
             model_name = settings.model.audio_emotion_model
-            logger.info(f"Carregando modelo de emoção vocal: {model_name}")
+            #logger.info(f"🎭 Carregando modelo de emoção vocal: [cyan]{model_name}[/cyan]")
             self._feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
             self._model = AutoModelForAudioClassification.from_pretrained(model_name)
             self._model.to(torch.device(settings.device))
@@ -249,14 +262,7 @@ class EmotionAnalyzer:
     def analyze_emotions(
         self, audio: np.ndarray, sr: int, segment_duration: float = 3.0
     ) -> list[EmotionSegment]:
-        """
-        Analisa emoções por segmentos do áudio.
-
-        Args:
-            audio: Array do áudio
-            sr: Sample rate
-            segment_duration: Duração de cada segmento em segundos
-        """
+        """Analisa emoções por segmentos do áudio."""
         self._ensure_loaded()
 
         segment_samples = int(segment_duration * sr)
@@ -291,25 +297,21 @@ class EmotionAnalyzer:
 
         return emotions
 
-    def compute_risk_score(self, emotions: list[EmotionSegment]) -> tuple[float, str]:
-        """
-        Calcula score de risco baseado nas emoções detectadas.
-
-        Pondera emoções negativas (tristeza, medo, raiva) sobre neutras.
-        """
+    def compute_risk_score(self, emotions: list[EmotionSegment], has_text_risk: bool = False) -> tuple[float, str]:
         if not emotions:
-            return 0.0, "baixo"
+            risk_score = 0.3 if has_text_risk else 0.0
+        else:
+            negative_emotions = {"sad", "angry", "fearful", "disgusted"}
+            total_confidence = sum(e.confidence for e in emotions)
+            if total_confidence == 0:
+                risk_score = 0.0
+            else:
+                negative_score = sum(e.confidence for e in emotions if e.emotion in negative_emotions)
+                risk_score = negative_score / total_confidence
 
-        negative_emotions = {"sad", "angry", "fearful", "disgusted"}
-        total_confidence = sum(e.confidence for e in emotions)
-        if total_confidence == 0:
-            return 0.0, "baixo"
-
-        negative_score = sum(
-            e.confidence for e in emotions
-            if e.emotion in negative_emotions
-        )
-        risk_score = negative_score / total_confidence
+        # Se houver gatilho de texto (ex: "violência", "socorro"), garante ao menos risco médio
+        if has_text_risk and risk_score < 0.3:
+            risk_score = 0.35
 
         if risk_score > 0.75:
             level = "crítico"
@@ -324,11 +326,7 @@ class EmotionAnalyzer:
 
 
 class AudioAnalyzer:
-    """
-    Analisador completo de áudio para saúde da mulher.
-
-    Orquestra transcrição, análise de emoções e features acústicas.
-    """
+    """Analisador completo de áudio para saúde da mulher com UI avançada no terminal."""
 
     def __init__(self):
         self.preprocessor = AudioPreprocessor()
@@ -337,10 +335,17 @@ class AudioAnalyzer:
 
     def analyze(self, audio_path: str | Path) -> AudioAnalysisReport:
         audio_path = Path(audio_path)
-        logger.info(f"Iniciando análise de áudio: {audio_path.name}")
+        
+        console.print(
+            Panel.fit(
+                f"[bold white]Arquivo:[/bold white] [bold cyan]{audio_path.name}[/bold cyan]\n"
+                f"[bold white]Dispositivo:[/bold white] [green]{settings.device.upper()}[/green]",
+                title="[bold blue]🎙️ Processando Análise de Áudio[/bold blue]",
+                border_style="blue",
+            )
+        )
 
         audio, sr = self.preprocessor.load_audio(audio_path)
-
         features = self.preprocessor.extract_features(audio, sr)
 
         report = self.transcriber.transcribe(audio_path)
@@ -352,17 +357,35 @@ class AudioAnalyzer:
 
         report.audio_features = features
         report.risk_score = risk_score
-        report.risk_level = risk_level
+        report.risk_level = risk_level.upper()
+        report.duration_seconds = features.duration_seconds
 
-        if report.has_alerts:
-            logger.warning(
-                f"ALERTA: Risco {risk_level} detectado em {audio_path.name} "
-                f"(score: {risk_score:.2f}, fatores textuais: {report.risk_factors})"
-            )
+        # Renderizar Tabela Rich Resumo
+        self._print_visual_summary(report)
 
-        logger.info(
-            f"Análise de áudio concluída: duração={features.duration_seconds:.1f}s, "
-            f"risco={risk_level} ({risk_score:.2f}), "
-            f"emoções={report.sentiment_summary}"
-        )
         return report
+
+    def _print_visual_summary(self, report: AudioAnalysisReport):
+        """Exibe resumo visual estilizado no terminal."""
+        cor_risco = (
+            "bold green" if report.risk_level == "BAIXO"
+            else "bold yellow" if report.risk_level == "MÉDIO"
+            else "bold red"
+        )
+
+        table = Table(
+            title="📊 Resumo Clínico de Áudio",
+            header_style="bold blue",
+            border_style="bright_black",
+        )
+        table.add_column("Métrica", style="bold white")
+        table.add_column("Valor / Diagnóstico", justify="left")
+
+        table.add_row("⏱️ Duração", f"{report.duration_seconds:.1f} segundos")
+        table.add_row("🌐 Idioma", report.language)
+        table.add_row("⚠️ Nível de Risco", f"[{cor_risco}]{report.risk_level} ({report.risk_score:.2f})[/{cor_risco}]")
+        table.add_row("🔑 Indicadores Textuais", ", ".join(report.risk_factors) if report.risk_factors else "[dim]Nenhum[/dim]")
+
+        console.print("\n")
+        console.print(table)
+        console.print("\n")
