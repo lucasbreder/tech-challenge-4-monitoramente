@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+eggs/
+*.egg
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+env/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Modelos treinados (pesados)
+models/*.pt
+models/*.pkl
+models/*.onnx
+models/*.h5
+models/*.hdf5
+
+# Dados
+data/videos/*
+data/audios/*
+data/reports/*
+!data/videos/.gitkeep
+!data/audios/.gitkeep
+!data/reports/.gitkeep
+
+# Notebooks
+notebooks/.ipynb_checkpoints/
+*.ipynb_checkpoints*
+
+# Logs
+*.log
+logs/
+
+# Cache
+.cache/
+*.cache
+
+# Jupyter
+.jupyter/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# CUDA / GPU
+*.cubin
+*.fatbin
+
+# Coverage
+htmlcov/
+.coverage
+.coverage.*
+*.cover
