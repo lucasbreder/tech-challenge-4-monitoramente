@@ -82,33 +82,93 @@ class AzureSpeechService:
         except ImportError:
             raise RuntimeError("azure-cognitiveservices-speech não instalado")
 
-        speech_config = self._get_config()
-        if speech_config is None:
-            raise RuntimeError("Falha ao configurar Azure Speech")
+        audio_path = Path(audio_path)
+        converted_path = audio_path
 
-        audio_config = speechsdk.audio.AudioConfig(filename=str(audio_path))
+        if audio_path.suffix.lower() not in (".wav",):
+            try:
+                import librosa
+                import soundfile as sf
+                audio, sr = librosa.load(str(audio_path), sr=16000, mono=True)
+                converted_path = audio_path.with_suffix(".azure_temp.wav")
+                sf.write(str(converted_path), audio, sr)
+                logger.debug(f"Áudio convertido para WAV 16kHz: {converted_path.name}")
+            except Exception as e:
+                logger.warning(f"Não foi possível converter áudio para WAV: {e}")
+
         try:
-            recognizer = speechsdk.SpeechRecognizer(
-                speech_config=speech_config, audio_config=audio_config
+            speech_config = self._get_config()
+            if speech_config is None:
+                raise RuntimeError("Falha ao configurar Azure Speech")
+
+            audio_config = speechsdk.audio.AudioConfig(filename=str(converted_path))
+            speech_config.set_property(
+                speechsdk.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, "30000"
             )
-            result = recognizer.recognize_once()
-            if result.reason == speechsdk.ResultReason.RecognizedSpeech:
-                return result.text
-            elif result.reason == speechsdk.ResultReason.NoMatch:
-                logger.warning("Azure Speech: nenhum texto reconhecido no áudio")
-                return ""
-            elif result.reason == speechsdk.ResultReason.Canceled:
-                cancellation = speechsdk.CancellationDetails.from_result(result)
-                logger.warning(
-                    f"Azure Speech cancelado: {cancellation.reason} - {cancellation.error_details}"
+            speech_config.set_property(
+                speechsdk.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "5000"
+            )
+
+            try:
+                import librosa
+                duration = librosa.get_duration(path=str(converted_path))
+            except Exception:
+                duration = 0
+
+            if duration > 12:
+                all_text = []
+                done = False
+
+                def _on_result(evt):
+                    nonlocal all_text
+                    all_text.append(evt.result.text)
+
+                def _on_session_stopped(evt):
+                    nonlocal done
+                    done = True
+
+                recognizer = speechsdk.SpeechRecognizer(
+                    speech_config=speech_config, audio_config=audio_config
                 )
+                recognizer.recognized.connect(_on_result)
+                recognizer.session_stopped.connect(_on_session_stopped)
+                recognizer.start_continuous_recognition_async()
+
+                import time
+                timeout = duration + 15
+                start = time.time()
+                while not done and (time.time() - start) < timeout:
+                    time.sleep(0.2)
+                recognizer.stop_continuous_recognition_async()
+
+                text = " ".join(all_text)
+                if text.strip():
+                    return text.strip()
+                logger.warning("Azure Speech contínuo: nenhum texto reconhecido")
                 return ""
             else:
-                logger.warning(f"Azure Speech: resultado inesperado ({result.reason})")
-                return ""
-        except Exception as e:
-            logger.warning(f"Azure Speech: erro nativo - {e}")
-            return ""
+                recognizer = speechsdk.SpeechRecognizer(
+                    speech_config=speech_config, audio_config=audio_config
+                )
+                result = recognizer.recognize_once()
+
+                if result.reason == speechsdk.ResultReason.RecognizedSpeech:
+                    return result.text
+                elif result.reason == speechsdk.ResultReason.NoMatch:
+                    logger.warning("Azure Speech: nenhum texto reconhecido no áudio")
+                    return ""
+                elif result.reason == speechsdk.ResultReason.Canceled:
+                    cancellation = speechsdk.CancellationDetails.from_result(result)
+                    logger.warning(
+                        f"Azure Speech cancelado: {cancellation.reason} - {cancellation.error_details}"
+                    )
+                    return ""
+                else:
+                    logger.warning(f"Azure Speech: resultado inesperado ({result.reason})")
+                    return ""
+        finally:
+            if converted_path != audio_path:
+                converted_path.unlink(missing_ok=True)
 
     def analyze_sentiment(self, text: str) -> dict:
         if not self.is_available:
@@ -194,10 +254,20 @@ class AzureVisionService:
                 ],
             )
 
+            tags = []
+            if result.tags:
+                for t in result.tags:
+                    tags.append(t.name if hasattr(t, "name") else str(t))
+
+            objects = []
+            if result.objects:
+                for o in result.objects:
+                    objects.append(o.name if hasattr(o, "name") else str(o))
+
             return {
                 "caption": result.caption.text if result.caption else "",
-                "tags": [t.name for t in result.tags] if result.tags else [],
-                "objects": [o.name for o in result.objects] if result.objects else [],
+                "tags": tags,
+                "objects": objects,
             }
         except ImportError:
             logger.warning("azure-ai-vision-imageanalysis não instalado")
@@ -282,3 +352,42 @@ class AzureStorageService:
         except Exception as e:
             logger.error(f"Erro no download do Azure Storage: {e}")
             raise
+
+    def list_files(self, container_name: str = "saude-mulher") -> list[dict]:
+        if not self.is_available:
+            return []
+
+        try:
+            from azure.storage.blob import BlobServiceClient
+
+            service = BlobServiceClient.from_connection_string(self.connection_string)
+            container = service.get_container_client(container_name)
+            if not container.exists():
+                return []
+
+            blobs = []
+            for blob in container.list_blobs():
+                blobs.append({
+                    "name": blob.name,
+                    "size": blob.size,
+                    "last_modified": blob.last_modified.isoformat() if blob.last_modified else "",
+                    "container": container_name,
+                })
+            return blobs
+        except Exception as e:
+            logger.error(f"Erro ao listar blobs: {e}")
+            return []
+
+    def delete_file(self, blob_name: str, container_name: str = "saude-mulher") -> bool:
+        if not self.is_available:
+            return False
+        try:
+            from azure.storage.blob import BlobServiceClient
+            service = BlobServiceClient.from_connection_string(self.connection_string)
+            container = service.get_container_client(container_name)
+            container.delete_blob(blob_name)
+            logger.info(f"Blob removido: {container_name}/{blob_name}")
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao deletar blob: {e}")
+            return False

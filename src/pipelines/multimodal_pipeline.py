@@ -74,6 +74,7 @@ class MultimodalPipeline:
         video_alerts = []
         audio_alerts = []
         vitals_results = []
+        audio_report_score = 0.0
 
         if video_path:
             from src.agents.video_agent import VideoType
@@ -88,12 +89,13 @@ class MultimodalPipeline:
 
         if audio_path:
             logger.info(f"Processando áudio: {audio_path}")
-            _, audio_alerts = self.audio_pipeline.run(
+            audio_report, audio_alerts = self.audio_pipeline.run(
                 audio_path=audio_path,
                 consultation_type=AudioConsultationType(consultation_type),
                 export_report=export_report,
                 progress_callback=audio_progress_callback,
             )
+            audio_report_score = audio_report.risk_score
 
         if vital_signs:
             from src.agents.anomaly_agent import GESTATIONAL_REFERENCE_RANGES, DEFAULT_REFERENCE_RANGES
@@ -121,6 +123,7 @@ class MultimodalPipeline:
             video_alerts=video_alerts,
             audio_alerts=audio_alerts,
             vitals_results=vitals_results,
+            audio_report_score=audio_report_score,
         )
 
         if assessment.overall_risk_level in ("crítico", "alto"):
@@ -129,13 +132,50 @@ class MultimodalPipeline:
             self.alert_service.send_notification(assessment)
 
         if export_report:
-            self.report_gen.export_fusion_report(assessment)
+            report_path = self.report_gen.export_fusion_report(assessment)
+            self._upload_to_azure(patient_id, video_path, audio_path, report_path)
 
         logger.info(
             f"Pipeline multimodal concluído: risco={assessment.overall_risk_level} "
             f"(score: {assessment.overall_risk_score:.2f})"
         )
         return assessment
+
+    def _upload_to_azure(
+        self, patient_id: str, video_path: str | Path | None,
+        audio_path: str | Path | None, report_path: Path,
+    ) -> None:
+        from src.config import settings
+
+        if not settings.azure.storage_connection_string:
+            return
+
+        try:
+            from src.services.azure_services import AzureStorageService
+            storage = AzureStorageService()
+            if not storage.is_available:
+                return
+
+            from datetime import datetime
+            prefix = f"{patient_id}/{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+            storage.upload_file(report_path, container_name="saude-mulher",
+                                blob_name=f"{prefix}/{report_path.name}")
+
+            if video_path and Path(video_path).exists():
+                vp = Path(video_path)
+                storage.upload_file(vp, container_name="saude-mulher",
+                                    blob_name=f"{prefix}/video{vp.suffix}")
+                logger.info("Vídeo enviado para Azure Storage")
+
+            if audio_path and Path(audio_path).exists():
+                ap = Path(audio_path)
+                storage.upload_file(ap, container_name="saude-mulher",
+                                    blob_name=f"{prefix}/audio{ap.suffix}")
+                logger.info("Áudio enviado para Azure Storage")
+
+        except Exception as e:
+            logger.warning(f"Não foi possível enviar mídia para Azure Storage: {e}")
 
     def _log_azure_services(self) -> None:
         from src.config import settings

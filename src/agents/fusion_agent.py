@@ -81,13 +81,14 @@ class MultimodalFusionAgent:
         video_alerts: list[VideoAnomalyAlert] | None = None,
         audio_alerts: list[AudioAlert] | None = None,
         vitals_results: list[AnomalyDetectionResult] | None = None,
+        audio_report_score: float = 0.0,
     ) -> FusionRiskAssessment:
         video_alerts = video_alerts or []
         audio_alerts = audio_alerts or []
         vitals_results = vitals_results or []
 
         video_score = self._compute_video_risk(video_alerts)
-        audio_score = self._compute_audio_risk(audio_alerts)
+        audio_score = self._compute_audio_risk(audio_alerts, audio_report_score)
         vitals_score = self._compute_vitals_risk(vitals_results)
 
         overall_score = (
@@ -132,14 +133,16 @@ class MultimodalFusionAgent:
             return 0.0
 
         severity_weights = {"crítica": 1.0, "alta": 0.8, "média": 0.5, "baixa": 0.2}
-        weighted = sum(severity_weights.get(a.severity, 0.2) * a.confidence for a in alerts)
-        return min(1.0, weighted / max(len(alerts), 1))
+        top_alerts = sorted(alerts, key=lambda a: severity_weights.get(a.severity, 0.2) * a.confidence, reverse=True)
+        top_n = max(1, min(10, len(top_alerts)))
+        top_alerts = top_alerts[:top_n]
 
-    def _compute_audio_risk(self, alerts: list[AudioAlert]) -> float:
-        if not alerts:
-            return 0.0
+        weighted = sum(severity_weights.get(a.severity, 0.2) * a.confidence for a in top_alerts)
+        return min(1.0, weighted / len(top_alerts))
 
-        return max(a.risk_score for a in alerts) if alerts else 0.0
+    def _compute_audio_risk(self, alerts: list[AudioAlert], report_score: float = 0.0) -> float:
+        max_alert = max(a.risk_score for a in alerts) if alerts else 0.0
+        return max(max_alert, report_score)
 
     def _compute_vitals_risk(self, results: list[AnomalyDetectionResult]) -> float:
         if not results:

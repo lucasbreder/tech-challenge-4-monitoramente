@@ -56,6 +56,10 @@ class AlertService:
             f"Risco {assessment.overall_risk_level} (score: {assessment.overall_risk_score:.2f})"
         )
         self._save_alert_log(assessment, level="info")
+
+        if self.email_password:
+            self._send_email(assessment, is_alert=False)
+
         return True
 
     def _save_alert_log(self, assessment, level: str = "info") -> Path:
@@ -96,10 +100,15 @@ class AlertService:
             body = self._build_email_body(assessment)
             msg.attach(MIMEText(body, "html", "utf-8"))
 
-            with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=10) as server:
-                server.starttls()
-                server.login(self.email_from, self.email_password)
-                server.send_message(msg)
+            if self.smtp_port == 465:
+                with smtplib.SMTP_SSL(self.smtp_host, self.smtp_port, timeout=15) as server:
+                    server.login(self.email_from, self.email_password)
+                    server.send_message(msg)
+            else:
+                with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=15) as server:
+                    server.starttls()
+                    server.login(self.email_from, self.email_password)
+                    server.send_message(msg)
 
             logger.info(f"Email enviado para {self.email_to}")
             return True

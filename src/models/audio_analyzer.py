@@ -201,6 +201,15 @@ class SpeechToText:
         if settings.azure.speech_key and len(settings.azure.speech_key) > 30 \
            and "your_" not in settings.azure.speech_key.lower():
             try:
+                import azure.cognitiveservices.speech as speechsdk
+                cfg = speechsdk.SpeechConfig(
+                    subscription=settings.azure.speech_key,
+                    region=settings.azure.speech_region,
+                )
+                cfg.speech_recognition_language = "pt-BR"
+                speechsdk.SpeechRecognizer(speech_config=cfg)
+                del cfg
+
                 from src.services.azure_services import AzureSpeechService
                 svc = AzureSpeechService()
                 if svc.is_available:

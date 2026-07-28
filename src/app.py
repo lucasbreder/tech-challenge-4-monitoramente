@@ -49,26 +49,57 @@ with st.sidebar:
     st.markdown("- Isolation Forest (anomalias)")
 
     st.subheader("Serviços Cloud")
-    azure_status = []
     try:
         from src.config import settings as app_settings
         if app_settings.azure.speech_key:
-            azure_status.append("Azure Speech ✅")
+            st.markdown("- Azure Speech ✅")
         else:
-            azure_status.append("Azure Speech ❌")
+            st.markdown("- Azure Speech ❌")
         if app_settings.azure.storage_connection_string:
-            azure_status.append("Azure Storage ✅")
+            st.markdown("- Azure Storage ✅")
         else:
-            azure_status.append("Azure Storage ❌")
+            st.markdown("- Azure Storage ❌")
         if app_settings.azure.vision_key and app_settings.azure.vision_endpoint:
-            azure_status.append("Azure Vision ✅")
+            st.markdown("- Azure Vision ✅")
         else:
-            azure_status.append("Azure Vision ❌")
-    except Exception:
-        azure_status = ["Azure: verifique .env"]
+            st.markdown("- Azure Vision ❌")
 
-    for s in azure_status:
-        st.markdown(f"- {s}")
+        if app_settings.alert.email_password:
+            st.markdown("- Alertas por Email ✅")
+        else:
+            st.markdown("- Alertas por Email ❌")
+            st.caption("Configure ALERT_EMAIL_* no .env")
+
+        if app_settings.azure.storage_connection_string:
+            with st.expander("☁️ Bucket Azure", expanded=False):
+                if st.button("🔄 Atualizar", key="refresh_bucket"):
+                    st.rerun()
+                try:
+                    from src.services.azure_services import AzureStorageService
+                    storage = AzureStorageService()
+                    files = storage.list_files("saude-mulher")
+                    alerts_files = storage.list_files("saude-mulher-alertas")
+
+                    if not files and not alerts_files:
+                        st.caption("Nenhum arquivo no bucket.")
+
+                    if alerts_files:
+                        st.caption(f"📋 Alertas ({len(alerts_files)})")
+                        for f in sorted(alerts_files, key=lambda x: x["last_modified"], reverse=True)[:10]:
+                            size_kb = f.get("size", 0) / 1024
+                            st.code(f["name"])
+                            st.caption(f"{size_kb:.1f} KB")
+
+                    if files:
+                        st.caption(f"📁 Pipeline ({len(files)})")
+                        for f in sorted(files, key=lambda x: x["last_modified"], reverse=True)[:10]:
+                            size_kb = f.get("size", 0) / 1024
+                            st.code(f["name"])
+                            st.caption(f"{size_kb:.1f} KB — {f.get('last_modified', '')[:19]}")
+                except Exception as e:
+                    st.warning(f"Erro ao acessar bucket: {e}")
+    except Exception:
+        st.markdown("- Azure: verifique .env")
 
 with tab1:
     st.header("Pipeline Multimodal Completo")
@@ -85,8 +116,9 @@ with tab1:
         )
         video_type = st.selectbox(
             "Tipo de Vídeo",
-            ["consulta", "cirurgia", "fisioterapia", "triagem_violencia"],
+            ["Consulta", "Cirurgia", "Fisioterapia", "Triagem de Violência"],
         )
+        video_type_map = {"Consulta": "consulta", "Cirurgia": "cirurgia", "Fisioterapia": "fisioterapia", "Triagem de Violência": "triagem_violencia"}
 
     with col2:
         audio_file = st.file_uploader(
@@ -96,54 +128,36 @@ with tab1:
         )
         consultation_type = st.selectbox(
             "Tipo de Consulta",
-            ["ginecologica", "pre_natal", "pos_parto", "vitima_violencia"],
+            ["Ginecológica", "Pré-Natal", "Pós-Parto", "Vítima de Violência"],
+        )
+        consult_map = {"Ginecológica": "ginecologica", "Pré-Natal": "pre_natal", "Pós-Parto": "pos_parto", "Vítima de Violência": "vitima_violencia"}
+
+    with st.form("pipeline_form", clear_on_submit=False):
+        with st.expander("🫀 Sinais Vitais (opcional)", expanded=False):
+            vcol1, vcol2, vcol3 = st.columns(3)
+
+            with vcol1:
+                vs_pressao_sis = st.number_input("Pressão Sistólica", value=0.0, step=0.1, help="mmHg — deixe 0 para ignorar")
+                vs_pressao_dia = st.number_input("Pressão Diastólica", value=0.0, step=0.1, help="mmHg")
+                vs_temp = st.number_input("Temperatura", value=0.0, step=0.1, help="°C")
+
+            with vcol2:
+                vs_fetal_hr = st.number_input("Bat. Fetais", value=0.0, step=1.0, help="bpm")
+                vs_maternal_hr = st.number_input("Bat. Maternos", value=0.0, step=1.0, help="bpm")
+                vs_o2 = st.number_input("Saturação O₂", value=0.0, step=0.1, help="%")
+
+            with vcol3:
+                vs_glucose = st.number_input("Glicose", value=0.0, step=1.0, help="mg/dL")
+                vs_hormone = st.number_input("Nível Hormonal", value=0.0, step=0.1, help="Z-score")
+                vs_weight = st.number_input("Peso", value=0.0, step=0.1, help="kg")
+                is_gestational = st.checkbox("Faixas gestacionais", value=False, key="gest_multimodal")
+
+        submitted = st.form_submit_button(
+            "Executar Pipeline Multimodal", type="primary", use_container_width=True,
         )
 
-    with st.expander("🫀 Sinais Vitais (opcional)", expanded=False):
-        vitals_data = []
-        vcol1, vcol2, vcol3, vcol4 = st.columns(4)
-
-        with vcol1:
-            vs_pressao_sis = st.number_input("Pressão Sistólica", value=0.0, step=0.1, help="mmHg — deixe 0 para ignorar")
-            vs_pressao_dia = st.number_input("Pressão Diastólica", value=0.0, step=0.1, help="mmHg")
-            vs_temp = st.number_input("Temperatura", value=0.0, step=0.1, help="°C")
-
-        with vcol2:
-            vs_fetal_hr = st.number_input("Bat. Fetais", value=0.0, step=1.0, help="bpm")
-            vs_maternal_hr = st.number_input("Bat. Maternos", value=0.0, step=1.0, help="bpm")
-            vs_o2 = st.number_input("Saturação O₂", value=0.0, step=0.1, help="%")
-
-        with vcol3:
-            vs_glucose = st.number_input("Glicose", value=0.0, step=1.0, help="mg/dL")
-            vs_hormone = st.number_input("Nível Hormonal", value=0.0, step=0.1, help="Z-score")
-            vs_weight = st.number_input("Peso", value=0.0, step=0.1, help="kg")
-
-        with vcol4:
-            st.caption("Valores > 0 serão analisados")
-            is_gestational = st.checkbox("Faixas gestacionais", value=False, key="gest_multimodal")
-
-        signals = [
-            ("pressao_sistolica", vs_pressao_sis, "mmHg"),
-            ("pressao_diastolica", vs_pressao_dia, "mmHg"),
-            ("batimentos_fetais", vs_fetal_hr, "bpm"),
-            ("batimentos_maternos", vs_maternal_hr, "bpm"),
-            ("temperatura", vs_temp, "°C"),
-            ("saturacao_oxigenio", vs_o2, "%"),
-            ("glicose", vs_glucose, "mg/dL"),
-            ("nivel_hormonal", vs_hormone, "Z-score"),
-            ("peso", vs_weight, "kg"),
-        ]
-        for sig_type, val, unit in signals:
-            if val > 0:
-                vitals_data.append({
-                    "timestamp": 0.0,
-                    "signal_type": sig_type,
-                    "value": float(val),
-                    "unit": unit,
-                })
-
-    if st.button("Executar Pipeline Multimodal", type="primary", use_container_width=True):
-        if not video_file and not audio_file and not vitals_data:
+    if submitted:
+        if not video_file and not audio_file and not (vs_pressao_sis > 0 or vs_pressao_dia > 0 or vs_fetal_hr > 0 or vs_maternal_hr > 0 or vs_temp > 0 or vs_o2 > 0 or vs_glucose > 0 or vs_hormone > 0 or vs_weight > 0):
             st.warning("Faça upload de pelo menos um arquivo (vídeo ou áudio) ou preencha sinais vitais.")
         else:
             with st.spinner("Processando pipeline multimodal..."):
@@ -163,6 +177,27 @@ with tab1:
                     ) as tmp:
                         tmp.write(audio_file.read())
                         audio_path = tmp.name
+
+                signals = [
+                    ("pressao_sistolica", vs_pressao_sis, "mmHg"),
+                    ("pressao_diastolica", vs_pressao_dia, "mmHg"),
+                    ("batimentos_fetais", vs_fetal_hr, "bpm"),
+                    ("batimentos_maternos", vs_maternal_hr, "bpm"),
+                    ("temperatura", vs_temp, "°C"),
+                    ("saturacao_oxigenio", vs_o2, "%"),
+                    ("glicose", vs_glucose, "mg/dL"),
+                    ("nivel_hormonal", vs_hormone, "Z-score"),
+                    ("peso", vs_weight, "kg"),
+                ]
+                vitals_data = []
+                for sig_type, val, unit in signals:
+                    if val > 0:
+                        vitals_data.append({
+                            "timestamp": 0.0,
+                            "signal_type": sig_type,
+                            "value": float(val),
+                            "unit": unit,
+                        })
 
                 try:
                     from src.pipelines.multimodal_pipeline import MultimodalPipeline
@@ -200,8 +235,8 @@ with tab1:
                         video_path=video_path,
                         audio_path=audio_path,
                         vital_signs=vitals_data if vitals_data else None,
-                        video_type=video_type,
-                        consultation_type=consultation_type,
+                        video_type=video_type_map[video_type],
+                        consultation_type=consult_map[consultation_type],
                         export_report=True,
                         progress_callback=update_video_progress,
                         audio_progress_callback=update_audio_progress,
@@ -218,6 +253,9 @@ with tab1:
                         audio_text.empty()
 
                     st.success("Pipeline concluído com sucesso!")
+
+                    if app_settings.alert.email_password:
+                        st.info(f"📧 Relatório enviado para {app_settings.alert.email_to}")
 
                     col_a, col_b, col_c = st.columns(3)
                     col_a.metric("Score de Risco", f"{assessment.overall_risk_score:.2f}")
@@ -285,9 +323,10 @@ with tab2:
     )
     vid_type = st.selectbox(
         "Tipo de Vídeo",
-        ["consulta", "cirurgia", "fisioterapia", "triagem_violencia"],
+        ["Consulta", "Cirurgia", "Fisioterapia", "Triagem de Violência"],
         key="vid_type",
     )
+    vid_type_map = {"Consulta": "consulta", "Cirurgia": "cirurgia", "Fisioterapia": "fisioterapia", "Triagem de Violência": "triagem_violencia"}
 
     if vid_file and st.button("Analisar Vídeo", type="primary"):
         with tempfile.NamedTemporaryFile(
@@ -311,7 +350,7 @@ with tab2:
             pipeline = VideoPipeline()
             report, alerts = pipeline.run(
                 video_path=tmp_path,
-                video_type=VideoType(vid_type),
+                video_type=VideoType(vid_type_map[vid_type]),
                 export_report=False,
                 progress_callback=update_progress,
             )
@@ -354,9 +393,10 @@ with tab3:
     )
     aud_type = st.selectbox(
         "Tipo de Consulta",
-        ["ginecologica", "pre_natal", "pos_parto", "vitima_violencia"],
+        ["Ginecológica", "Pré-Natal", "Pós-Parto", "Vítima de Violência"],
         key="aud_type",
     )
+    aud_type_map = {"Ginecológica": "ginecologica", "Pré-Natal": "pre_natal", "Pós-Parto": "pos_parto", "Vítima de Violência": "vitima_violencia"}
 
     if aud_file and st.button("Analisar Áudio", type="primary"):
         with tempfile.NamedTemporaryFile(
@@ -379,7 +419,7 @@ with tab3:
         pipeline = AudioPipeline()
         report, alerts = pipeline.run(
             audio_path=tmp_path,
-            consultation_type=AudioConsultationType(aud_type),
+            consultation_type=AudioConsultationType(aud_type_map[aud_type]),
             export_report=False,
             progress_callback=update_audio_progress,
         )
