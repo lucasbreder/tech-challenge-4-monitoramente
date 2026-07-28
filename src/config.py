@@ -69,8 +69,8 @@ class ModelConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    yolo_model_path: str = Field(default="models/yolov8_custom.pt", description="Caminho do modelo YOLOv8 treinado (.pt)")
-    yolo_config_path: str = Field(default="data/dataset/unified/data.yaml", description="Dataset YAML para fine-tuning")
+    yolo_model_path: str = Field(default="models/emotions.pt", description="Caminho do modelo YOLOv8 treinado (.pt)")
+    yolo_config_path: str = Field(default="data/dataset/emotions/data.yaml", description="Dataset YAML para fine-tuning")
     yolo_pretrained: bool = Field(default=True, description="Usar pesos pré-treinados no COCO")
     yolo_confidence_threshold: float = Field(default=0.30, description="Limiar de confiança para detecção")
     yolo_iou_threshold: float = Field(default=0.5, description="Limiar de IOU para NMS")

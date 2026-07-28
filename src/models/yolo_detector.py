@@ -93,54 +93,66 @@ class YOLODetector:
         self.model_path = model_path or settings.model.yolo_model_path
         self.confidence = confidence_threshold or settings.model.yolo_confidence_threshold
         self.iou = iou_threshold or settings.model.yolo_iou_threshold
-        self._model: YOLO | None = None
+        self._models: dict[str, YOLO] = {}
+        self._models_loaded = False
 
-    @property
-    def model(self) -> YOLO:
-        if self._model is None:
-            self._load_model()
-        return self._model
+    def _load_models(self) -> None:
+        if self._models_loaded:
+            return
 
-    def _load_model(self) -> None:
-        custom_path = Path(self.model_path)
-        if custom_path.exists():
-            logger.info(f"Carregando modelo cirúrgico: {self.model_path}")
-            self._model = YOLO(str(custom_path))
-        else:
-            logger.warning(f"Modelo não encontrado: {self.model_path}")
-            logger.info("Treine o modelo primeiro:")
-            logger.info("  python convert_obb_dataset.py")
-            logger.info("  python train.py --config data/dataset/yolo/data.yaml --epochs 30 --batch 8")
-            logger.info("Usando YOLOv8n COCO como fallback...")
-            self._model = YOLO("yolov8n.pt")
+        model_files = {
+            "emotions": "models/emotions.pt",
+            "blood": "models/blood.pt",
+            "instruments": "models/instruments.pt",
+        }
+
         device = resolve_device(settings.device)
-        self._model.to(device)
-        logger.info(f"Modelo carregado no dispositivo: {device}")
+        for name, path in model_files.items():
+            if Path(path).exists():
+                logger.info(f"Carregando {name}: {path}")
+                self._models[name] = YOLO(path)
+                self._models[name].to(device)
+            else:
+                logger.warning(f"Modelo {name} não encontrado: {path}")
+
+        if not self._models:
+            logger.warning("Nenhum modelo encontrado. Treine primeiro:")
+            logger.warning("  python train.py --dataset emotions --epochs 30")
+            logger.warning("  python train.py --dataset blood --epochs 50")
+            logger.warning("  python train.py --dataset instruments --epochs 30")
+            logger.info("Usando YOLOv8n COCO como fallback...")
+            self._models["fallback"] = YOLO("yolov8n.pt")
+            self._models["fallback"].to(device)
+
+        self._models_loaded = True
+        logger.info(f"Modelos carregados: {list(self._models.keys())} ({device})")
 
     def process_frame(self, frame: np.ndarray, frame_number: int, fps: float) -> list[DetectionResult]:
-        results = self.model.predict(
-            source=frame, conf=self.confidence, iou=self.iou, verbose=False,
-        )
-        detections: list[DetectionResult] = []
+        self._load_models()
+        all_detections: list[DetectionResult] = []
         timestamp = frame_number / fps if fps > 0 else 0.0
 
-        for result in results:
-            if result.boxes is None:
-                continue
-            for box in result.boxes:
-                cls_id = int(box.cls.item())
-                confidence = float(box.conf.item())
-                xyxy = box.xyxy[0].tolist()
-                bbox = (int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3]))
-                class_name = self.model.names.get(cls_id, f"cls_{cls_id}")
+        for name, model in self._models.items():
+            results = model.predict(
+                source=frame, conf=self.confidence, iou=self.iou, verbose=False,
+            )
+            for result in results:
+                if result.boxes is None:
+                    continue
+                for box in result.boxes:
+                    cls_id = int(box.cls.item())
+                    confidence = float(box.conf.item())
+                    xyxy = box.xyxy[0].tolist()
+                    bbox = (int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3]))
+                    class_name = model.names.get(cls_id, f"cls_{cls_id}")
 
-                detections.append(DetectionResult(
-                    class_name=class_name, class_id=cls_id,
-                    confidence=confidence, bbox=bbox,
-                    frame_number=frame_number, timestamp_seconds=timestamp,
-                ))
+                    all_detections.append(DetectionResult(
+                        class_name=class_name, class_id=cls_id,
+                        confidence=confidence, bbox=bbox,
+                        frame_number=frame_number, timestamp_seconds=timestamp,
+                    ))
 
-        return detections
+        return all_detections
 
     def analyze_video(
         self,
@@ -427,9 +439,10 @@ class YOLODetector:
     def finetune(
         self, data_yaml: str | Path, epochs: int = 50,
         imgsz: int = 640, batch: int = 16,
+        model_name: str = "custom",
     ) -> None:
         device = resolve_device(settings.device)
-        logger.info(f"Fine-tuning: epochs={epochs}, imgsz={imgsz}, device={device}")
+        logger.info(f"Fine-tuning {model_name}: epochs={epochs}, imgsz={imgsz}, device={device}")
         model = YOLO("yolov8n.pt")
         model.train(
             data=str(data_yaml),
@@ -454,7 +467,7 @@ class YOLODetector:
         metrics = model.val()
         logger.info(f"Validação: mAP50={metrics.box.map50:.4f} mAP50-95={metrics.box.map:.4f}")
 
-        save_path = Path("models") / "yolov8_custom.pt"
+        save_path = Path("models") / f"{model_name}.pt"
         save_path.parent.mkdir(exist_ok=True)
         model.save(str(save_path))
         self._model = model
