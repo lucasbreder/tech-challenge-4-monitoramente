@@ -34,10 +34,14 @@ models/*.onnx
 models/*.h5
 models/*.hdf5
 
+# Treinamento YOLO
+runs/
+
 # Dados
 data/videos/*
 data/audios/*
 data/reports/*
+data/dataset/
 !data/videos/.gitkeep
 !data/audios/.gitkeep
 !data/reports/.gitkeep
