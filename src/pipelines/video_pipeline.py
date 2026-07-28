@@ -44,6 +44,7 @@ class VideoPipeline:
         sample_rate: int = 10,
         export_report: bool = True,
         export_annotated: bool = False,
+        progress_callback: callable = None,
     ) -> tuple[VideoAnalysisReport, list[AnomalyAlert]]:
         video_path = Path(video_path)
         logger.info(f"=== Pipeline de Vídeo: {video_path.name} ({video_type.value}) ===")
@@ -52,6 +53,7 @@ class VideoPipeline:
             video_path=video_path,
             video_type=video_type,
             sample_rate=sample_rate,
+            progress_callback=progress_callback,
         )
 
         if export_report:

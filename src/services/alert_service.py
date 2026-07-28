@@ -69,6 +69,17 @@ class AlertService:
             json.dump(assessment.to_dict(), f, ensure_ascii=False, indent=2)
 
         logger.debug(f"Log de alerta salvo: {filepath}")
+
+        if settings.azure.storage_connection_string:
+            try:
+                from src.services.azure_services import AzureStorageService
+                storage = AzureStorageService()
+                if storage.is_available:
+                    storage.upload_file(filepath, container_name="saude-mulher-alertas")
+                    logger.info("Relatório sincronizado com Azure Blob Storage")
+            except Exception as e:
+                logger.warning(f"Não foi possível enviar para Azure Storage: {e}")
+
         return filepath
 
     def _send_email(self, assessment, is_alert: bool = False) -> bool:

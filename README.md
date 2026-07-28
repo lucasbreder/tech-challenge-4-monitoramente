@@ -46,10 +46,14 @@ Sistema de IA para análise e fusão de dados multimodais (vídeo, áudio e sina
 ```
 tech-4/
 ├── main.py                         # CLI principal (Typer) - ponto de entrada
+├── train.py                        # Script de fine-tuning do YOLOv8
+├── generate_dataset.py             # Gerador de dataset sintético para treino
 ├── requirements.txt                # Dependências
 ├── .env.example                    # Template de variáveis de ambiente
+├── .gitignore
 ├── AGENTS.md                       # Arquitetura de agentes autônomos
 ├── README.md                       # Este arquivo
+├── VIDEO_SCRIPT.md                 # Roteiro do vídeo de demonstração
 ├── src/
 │   ├── config.py                   # Configuração centralizada (Pydantic)
 │   ├── app.py                      # Interface Streamlit
@@ -74,10 +78,14 @@ tech-4/
 ├── data/
 │   ├── videos/                     # Vídeos para análise
 │   ├── audios/                     # Áudios para análise
+│   ├── dataset/                    # Dataset de treino do YOLOv8
+│   │   ├── images/{train,val}/
+│   │   └── labels/{train,val}/
 │   └── reports/                    # Relatórios gerados
 │       └── alerts/                 # Logs de alertas
 ├── tests/
-├── models/                         # Modelos treinados
+├── models/                         # Modelos treinados e config YAML
+│   └── yolov8_config.yaml          # Config do dataset para fine-tuning
 ├── notebooks/                      # Jupyter notebooks
 └── edital/
     └── fase-4-edital.md
@@ -88,7 +96,7 @@ tech-4/
 ## Requisitos
 
 - Python 3.10+
-- CUDA 11.8+ (opcional, para GPU)
+- CUDA 11.8+ (opcional — fallback automático para CPU)
 - Chaves Azure (opcional, para serviços cloud)
 
 ---
@@ -126,6 +134,9 @@ cp .env.example .env
 Edite o arquivo `.env` com suas chaves:
 
 ```env
+# Dispositivo (cpu, cuda ou mps — fallback automático se indisponível)
+DEVICE=cpu
+
 # OpenAI Whisper (obrigatório para transcrição)
 OPENAI_API_KEY=sua_chave_aqui
 
@@ -135,11 +146,17 @@ AZURE_SPEECH_REGION=brazilsouth
 AZURE_VISION_KEY=sua_chave_azure_vision
 AZURE_VISION_ENDPOINT=https://seu-endpoint.cognitiveservices.azure.com/
 
+# Caminho do dataset para fine-tuning
+YOLO_CONFIG_PATH=models/yolov8_config.yaml
+
 # Alertas por email (opcional)
 ALERT_EMAIL_FROM=alertas@hospital.com
 ALERT_EMAIL_TO=equipe_medica@hospital.com
 ALERT_EMAIL_PASSWORD=sua_senha_app
 ```
+
+> **Nota:** O `DEVICE` tem fallback automático. Se configurar `cuda` mas não tiver GPU,
+> o sistema emite um warning e executa em CPU.
 
 ---
 
@@ -277,20 +294,63 @@ Tipos de relatório:
 
 ---
 
-## Fine-tuning do YOLOv8
+## Treinamento do YOLOv8
 
-Para treinar o modelo com dataset customizado de imagens clínicas:
+### 1. Gerar dataset sintético (para testes)
+
+```bash
+# Gera 100 imagens de treino + 30 de validação com as 15 classes
+python generate_dataset.py
+
+# Ou com parâmetros customizados
+python generate_dataset.py --train 200 --val 50 --size 640
+```
+
+As imagens são geradas em `data/dataset/images/{train,val}/` com labels
+YOLO em `data/dataset/labels/{train,val}/`. As 15 classes incluem instrumentos
+cirúrgicos, sangramento, áreas críticas e expressões faciais.
+
+### 2. Treinar o modelo
+
+```bash
+# Usando o script dedicado (recomendado)
+python train.py --config models/yolov8_config.yaml --epochs 30 --batch 8
+
+# Com dataset próprio (substitua o YAML)
+python train.py --config meu_dataset.yaml --epochs 50 --batch 16
+```
+
+O modelo treinado é salvo automaticamente em `models/yolov8_custom.pt`.
+
+### 3. Treinar via Python API
 
 ```python
 from src.models.yolo_detector import YOLODetector
 
 detector = YOLODetector()
 detector.finetune(
-    data_yaml="models/dataset.yaml",
+    data_yaml="models/yolov8_config.yaml",
     epochs=50,
     imgsz=640,
     batch=16,
 )
+```
+
+### Estrutura esperada do dataset
+
+```
+data/dataset/
+├── images/
+│   ├── train/          ← imagens de treino (.jpg/.png)
+│   └── val/            ← imagens de validação
+└── labels/
+    ├── train/          ← anotações YOLO (.txt, mesmo nome da imagem)
+    └── val/
+```
+
+Cada `.txt` de anotação segue o formato:
+```
+<class_id> <x_center> <y_center> <width> <height>
 ```
 
 ---
@@ -317,8 +377,3 @@ python main.py demo
 Este projeto é parte do Tech Challenge Fase 4 - FIAP.
 
 ---
-
-**Autores:** Equipe Tech Challenge  
-**Disciplinas:** Todas as disciplinas da Fase 4  
-**Peso:** 90% da nota de todas as disciplinas
-# tech-challeng-4-monitoramente

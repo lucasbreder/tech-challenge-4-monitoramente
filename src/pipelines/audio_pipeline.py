@@ -42,6 +42,7 @@ class AudioPipeline:
         audio_path: str | Path,
         consultation_type: AudioConsultationType = AudioConsultationType.GYNECOLOGICAL,
         export_report: bool = True,
+        progress_callback: callable = None,
     ) -> tuple[AudioAnalysisReport, list[AudioAlert]]:
         audio_path = Path(audio_path)
         #logger.info(
@@ -51,6 +52,7 @@ class AudioPipeline:
         report, alerts = self.agent.analyze(
             audio_path=audio_path,
             consultation_type=consultation_type,
+            progress_callback=progress_callback,
         )
 
         if export_report:

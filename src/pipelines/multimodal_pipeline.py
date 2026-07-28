@@ -63,8 +63,13 @@ class MultimodalPipeline:
         video_type: str = "consulta",
         consultation_type: str = "ginecologica",
         export_report: bool = True,
+        progress_callback: callable = None,
+        audio_progress_callback: callable = None,
+        is_gestational: bool = False,
     ) -> FusionRiskAssessment:
         logger.info(f"=== Pipeline Multimodal: Paciente {patient_id} ===")
+
+        self._log_azure_services()
 
         video_alerts = []
         audio_alerts = []
@@ -78,6 +83,7 @@ class MultimodalPipeline:
                 video_path=video_path,
                 video_type=VideoType(video_type),
                 export_report=export_report,
+                progress_callback=progress_callback,
             )
 
         if audio_path:
@@ -86,10 +92,17 @@ class MultimodalPipeline:
                 audio_path=audio_path,
                 consultation_type=AudioConsultationType(consultation_type),
                 export_report=export_report,
+                progress_callback=audio_progress_callback,
             )
 
         if vital_signs:
-            logger.info(f"Processando {len(vital_signs)} sinais vitais")
+            from src.agents.anomaly_agent import GESTATIONAL_REFERENCE_RANGES, DEFAULT_REFERENCE_RANGES
+
+            self.anomaly_agent.reference_ranges = (
+                GESTATIONAL_REFERENCE_RANGES if is_gestational else DEFAULT_REFERENCE_RANGES
+            )
+            logger.info(f"Processando {len(vital_signs)} sinais vitais"
+                        f" {'(faixas gestacionais)' if is_gestational else ''}")
             records = []
             for vs in vital_signs:
                 record = VitalSignRecord(
@@ -123,6 +136,24 @@ class MultimodalPipeline:
             f"(score: {assessment.overall_risk_score:.2f})"
         )
         return assessment
+
+    def _log_azure_services(self) -> None:
+        from src.config import settings
+
+        services = []
+        if settings.azure.speech_key:
+            services.append("Speech (transcrição)")
+        if settings.azure.vision_key and settings.azure.vision_endpoint:
+            services.append("Vision (imagens)")
+        if settings.azure.storage_connection_string:
+            services.append("Storage (relatórios)")
+        if settings.azure.openai_api_key and settings.azure.openai_endpoint:
+            services.append("OpenAI (análise de texto)")
+
+        if services:
+            logger.info(f"Azure ativo: {', '.join(services)}")
+        else:
+            logger.info("Azure não configurado — usando apenas modelos locais")
 
 
 def run_multimodal_pipeline(

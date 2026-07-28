@@ -1,0 +1,29 @@
+# YOLOv8 Dataset Configuration - Saúde da Mulher
+# Dataset customizado para detecção de objetos e anomalias em vídeos clínicos ginecológicos
+
+# Caminhos do dataset (relativos a este arquivo)
+path: ../data/dataset          # Diretório raiz do dataset
+train: images/train            # Imagens de treino (relativo a 'path')
+val: images/val                # Imagens de validação (relativo a 'path')
+test: images/test              # Imagens de teste (opcional)
+
+# Número de classes
+nc: 15
+
+# Nomes das classes (devem corresponder ao SURGICAL_CLASSES em src/models/yolo_detector.py)
+names:
+  0: bisturi
+  1: tesoura_cirurgica
+  2: pinça_hemostatica
+  3: afastador_cirurgico
+  4: sutura
+  5: compressa
+  6: sangramento_normal
+  7: sangramento_anomalo
+  8: utero
+  9: ovarios
+  10: mamas
+  11: area_critica
+  12: objeto_suspeito
+  13: expressao_desconforto
+  14: expressao_medo

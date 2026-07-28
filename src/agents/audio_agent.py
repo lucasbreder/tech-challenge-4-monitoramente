@@ -96,6 +96,7 @@ class AudioAnalysisAgent:
         self,
         audio_path: str | Path,
         consultation_type: AudioConsultationType = AudioConsultationType.GYNECOLOGICAL,
+        progress_callback: callable = None,
     ) -> tuple[AudioAnalysisReport, list[AudioAlert]]:
         audio_path = Path(audio_path)
         logger.info(
@@ -103,7 +104,7 @@ class AudioAnalysisAgent:
             f"'{consultation_type.value}': {audio_path.name}"
         )
 
-        report = self.analyzer.analyze(audio_path)
+        report = self.analyzer.analyze(audio_path, progress_callback=progress_callback)
 
         alerts = self._generate_alerts(report, consultation_type)
 

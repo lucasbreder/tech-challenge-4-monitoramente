@@ -49,8 +49,26 @@ with st.sidebar:
     st.markdown("- Isolation Forest (anomalias)")
 
     st.subheader("Serviços Cloud")
-    st.markdown("- Azure Cognitive Services")
-    st.markdown("- Azure Blob Storage")
+    azure_status = []
+    try:
+        from src.config import settings as app_settings
+        if app_settings.azure.speech_key:
+            azure_status.append("Azure Speech ✅")
+        else:
+            azure_status.append("Azure Speech ❌")
+        if app_settings.azure.storage_connection_string:
+            azure_status.append("Azure Storage ✅")
+        else:
+            azure_status.append("Azure Storage ❌")
+        if app_settings.azure.vision_key and app_settings.azure.vision_endpoint:
+            azure_status.append("Azure Vision ✅")
+        else:
+            azure_status.append("Azure Vision ❌")
+    except Exception:
+        azure_status = ["Azure: verifique .env"]
+
+    for s in azure_status:
+        st.markdown(f"- {s}")
 
 with tab1:
     st.header("Pipeline Multimodal Completo")
@@ -81,9 +99,52 @@ with tab1:
             ["ginecologica", "pre_natal", "pos_parto", "vitima_violencia"],
         )
 
+    with st.expander("🫀 Sinais Vitais (opcional)", expanded=False):
+        vitals_data = []
+        vcol1, vcol2, vcol3, vcol4 = st.columns(4)
+
+        with vcol1:
+            vs_pressao_sis = st.number_input("Pressão Sistólica", value=0.0, step=0.1, help="mmHg — deixe 0 para ignorar")
+            vs_pressao_dia = st.number_input("Pressão Diastólica", value=0.0, step=0.1, help="mmHg")
+            vs_temp = st.number_input("Temperatura", value=0.0, step=0.1, help="°C")
+
+        with vcol2:
+            vs_fetal_hr = st.number_input("Bat. Fetais", value=0.0, step=1.0, help="bpm")
+            vs_maternal_hr = st.number_input("Bat. Maternos", value=0.0, step=1.0, help="bpm")
+            vs_o2 = st.number_input("Saturação O₂", value=0.0, step=0.1, help="%")
+
+        with vcol3:
+            vs_glucose = st.number_input("Glicose", value=0.0, step=1.0, help="mg/dL")
+            vs_hormone = st.number_input("Nível Hormonal", value=0.0, step=0.1, help="Z-score")
+            vs_weight = st.number_input("Peso", value=0.0, step=0.1, help="kg")
+
+        with vcol4:
+            st.caption("Valores > 0 serão analisados")
+            is_gestational = st.checkbox("Faixas gestacionais", value=False, key="gest_multimodal")
+
+        signals = [
+            ("pressao_sistolica", vs_pressao_sis, "mmHg"),
+            ("pressao_diastolica", vs_pressao_dia, "mmHg"),
+            ("batimentos_fetais", vs_fetal_hr, "bpm"),
+            ("batimentos_maternos", vs_maternal_hr, "bpm"),
+            ("temperatura", vs_temp, "°C"),
+            ("saturacao_oxigenio", vs_o2, "%"),
+            ("glicose", vs_glucose, "mg/dL"),
+            ("nivel_hormonal", vs_hormone, "Z-score"),
+            ("peso", vs_weight, "kg"),
+        ]
+        for sig_type, val, unit in signals:
+            if val > 0:
+                vitals_data.append({
+                    "timestamp": 0.0,
+                    "signal_type": sig_type,
+                    "value": float(val),
+                    "unit": unit,
+                })
+
     if st.button("Executar Pipeline Multimodal", type="primary", use_container_width=True):
-        if not video_file and not audio_file:
-            st.warning("Faça upload de pelo menos um arquivo (vídeo ou áudio).")
+        if not video_file and not audio_file and not vitals_data:
+            st.warning("Faça upload de pelo menos um arquivo (vídeo ou áudio) ou preencha sinais vitais.")
         else:
             with st.spinner("Processando pipeline multimodal..."):
                 video_path = None
@@ -106,22 +167,97 @@ with tab1:
                 try:
                     from src.pipelines.multimodal_pipeline import MultimodalPipeline
 
+                    video_progress = None
+                    video_text = None
+                    audio_progress = None
+                    audio_text = None
+
+                    if video_file:
+                        video_progress = st.progress(0, "Processando vídeo...")
+                        video_text = st.empty()
+
+                        def update_video_progress(current, total):
+                            pct = min(1.0, current / max(total, 1))
+                            video_progress.progress(pct, f"Processando vídeo... {current}/{total} frames")
+                            video_text.text(f"Vídeo: {pct:.0%} concluído")
+                    else:
+                        update_video_progress = None
+
+                    if audio_file:
+                        audio_progress = st.progress(0, "Processando áudio...")
+                        audio_text = st.empty()
+
+                        def update_audio_progress(current, total):
+                            pct = min(1.0, current / max(total, 1))
+                            audio_progress.progress(pct, f"Analisando emoções... {current}/{total} segmentos")
+                            audio_text.text(f"Áudio: {pct:.0%} concluído")
+                    else:
+                        update_audio_progress = None
+
                     pipeline = MultimodalPipeline()
                     assessment = pipeline.run(
                         patient_id=patient_id,
                         video_path=video_path,
                         audio_path=audio_path,
+                        vital_signs=vitals_data if vitals_data else None,
                         video_type=video_type,
                         consultation_type=consultation_type,
                         export_report=True,
+                        progress_callback=update_video_progress,
+                        audio_progress_callback=update_audio_progress,
+                        is_gestational=is_gestational,
                     )
+
+                    if video_progress:
+                        video_progress.empty()
+                    if video_text:
+                        video_text.empty()
+                    if audio_progress:
+                        audio_progress.empty()
+                    if audio_text:
+                        audio_text.empty()
 
                     st.success("Pipeline concluído com sucesso!")
 
                     col_a, col_b, col_c = st.columns(3)
                     col_a.metric("Score de Risco", f"{assessment.overall_risk_score:.2f}")
                     col_b.metric("Nível", assessment.overall_risk_level.upper())
-                    col_c.metric("Alertas", len(assessment.video_alerts) + len(assessment.audio_alerts))
+                    total_alerts = len(assessment.video_alerts) + len(assessment.audio_alerts) + len(assessment.vitals_alerts)
+                    col_c.metric("Alertas", total_alerts)
+
+                    if assessment.video_alerts:
+                        with st.expander(f"🎬 Alertas de Vídeo ({len(assessment.video_alerts)})", expanded=False):
+                            for a in assessment.video_alerts:
+                                sev = a.get("severidade", "baixa")
+                                icon = {"crítica": "🔴", "alta": "🟠", "média": "🟡", "baixa": "🟢"}.get(sev, "⚪")
+                                ts = a.get("timestamp_segundos", 0)
+                                st.warning(
+                                    f"{icon} **[{sev.upper()}]** {a.get('tipo_anomalia', '-')} "
+                                    f"({ts:.1f}s, conf: {a.get('confianca', 0):.2f})\n\n"
+                                    f"{a.get('descricao', '')}"
+                                )
+
+                    if assessment.audio_alerts:
+                        with st.expander(f"🎙️ Alertas de Áudio ({len(assessment.audio_alerts)})", expanded=False):
+                            for a in assessment.audio_alerts:
+                                sev = a.get("nivel_risco", "baixo")
+                                icon = {"crítico": "🔴", "alto": "🟠", "médio": "🟡", "baixo": "🟢"}.get(sev, "⚪")
+                                st.warning(
+                                    f"{icon} **[{sev.upper()}]** {a.get('tipo_alerta', '-')} "
+                                    f"(score: {a.get('score_risco', 0):.2f})\n\n"
+                                    f"{a.get('evidencia', '')}"
+                                )
+
+                    if assessment.vitals_alerts:
+                        with st.expander(f"🫀 Alertas de Sinais Vitais ({len(assessment.vitals_alerts)})", expanded=False):
+                            for a in assessment.vitals_alerts:
+                                sev = a.get("severidade", "baixa")
+                                icon = {"crítica": "🔴", "alta": "🟠", "média": "🟡", "baixa": "🟢"}.get(sev, "⚪")
+                            st.warning(
+                                f"{icon} **[{sev.upper()}]** {a.get('tipo', '-')} "
+                                f"= {a.get('valor', '-')} {a.get('unidade', '')} "
+                                f"(score: {a.get('score', 0):.2f})"
+                            )
 
                     if assessment.correlated_risks:
                         st.subheader("Riscos Correlacionados")
@@ -164,12 +300,24 @@ with tab2:
             from src.pipelines.video_pipeline import VideoPipeline
             from src.agents.video_agent import VideoType
 
+            progress_bar = st.progress(0, "Analisando frames...")
+            progress_text = st.empty()
+
+            def update_progress(current, total):
+                pct = min(1.0, current / max(total, 1))
+                progress_bar.progress(pct, f"Analisando frames... {current}/{total}")
+                progress_text.text(f"{pct:.0%} concluído")
+
             pipeline = VideoPipeline()
             report, alerts = pipeline.run(
                 video_path=tmp_path,
                 video_type=VideoType(vid_type),
                 export_report=False,
+                progress_callback=update_progress,
             )
+
+            progress_bar.empty()
+            progress_text.empty()
 
             st.success(f"Análise concluída! {report.frames_analyzed} frames analisados.")
 
@@ -217,100 +365,129 @@ with tab3:
             tmp.write(aud_file.read())
             tmp_path = tmp.name
 
-        with st.spinner("Transcrevendo e analisando áudio..."):
-            from src.pipelines.audio_pipeline import AudioPipeline
-            from src.agents.audio_agent import AudioConsultationType
+        from src.pipelines.audio_pipeline import AudioPipeline
+        from src.agents.audio_agent import AudioConsultationType
 
-            pipeline = AudioPipeline()
-            report, alerts = pipeline.run(
-                audio_path=tmp_path,
-                consultation_type=AudioConsultationType(aud_type),
-                export_report=False,
-            )
+        audio_progress = st.progress(0, "Processando áudio...")
+        audio_text = st.empty()
 
-            st.success("Análise concluída!")
+        def update_audio_progress(current, total):
+            pct = min(1.0, current / max(total, 1))
+            audio_progress.progress(pct, f"Analisando emoções... {current}/{total} segmentos")
+            audio_text.text(f"{pct:.0%} concluído")
 
-            col1, col2, col3 = st.columns(3)
-            risk_color = "inverse" if report.risk_level in ("alto", "crítico") else "normal"
-            col1.metric("Score de Risco", f"{report.risk_score:.2f}")
-            col2.metric("Nível", report.risk_level.upper(), delta_color=risk_color)
-            col3.metric("Duração", f"{report.duration_seconds:.1f}s")
+        pipeline = AudioPipeline()
+        report, alerts = pipeline.run(
+            audio_path=tmp_path,
+            consultation_type=AudioConsultationType(aud_type),
+            export_report=False,
+            progress_callback=update_audio_progress,
+        )
 
-            st.subheader("Transcrição")
-            st.text_area("Texto transcrito", report.transcription, height=150)
+        audio_progress.empty()
+        audio_text.empty()
 
-            if report.emotions:
-                st.subheader("Emoções Detectadas")
-                emotion_df = pd.DataFrame([
-                    {"Início (s)": f"{e.start_seconds:.1f}", "Emoção": e.emotion, "Confiança": f"{e.confidence:.2f}"}
-                    for e in report.emotions
-                ])
-                st.dataframe(emotion_df, use_container_width=True)
+        st.success("Análise concluída!")
 
-            if report.risk_factors:
-                st.subheader("Fatores de Risco Textuais")
-                for f in report.risk_factors:
-                    st.warning(f"Indicador: {f}")
+        col1, col2, col3 = st.columns(3)
+        risk_color = "inverse" if report.risk_level in ("alto", "crítico") else "normal"
+        col1.metric("Score de Risco", f"{report.risk_score:.2f}")
+        col2.metric("Nível", report.risk_level.upper(), delta_color=risk_color)
+        col3.metric("Duração", f"{report.duration_seconds:.1f}s")
 
-            if alerts:
-                st.subheader("Alertas Gerados")
-                for a in alerts:
-                    st.warning(f"[{a.risk_level.upper()}] {a.evidence}")
+        st.subheader("Transcrição")
+        st.text_area("Texto transcrito", report.transcription, height=150)
+
+        if report.emotions:
+            st.subheader("Emoções Detectadas")
+            emotion_df = pd.DataFrame([
+                {"Início (s)": f"{e.start_seconds:.1f}", "Emoção": e.emotion, "Confiança": f"{e.confidence:.2f}"}
+                for e in report.emotions
+            ])
+            st.dataframe(emotion_df, use_container_width=True)
+
+        if report.risk_factors:
+            st.subheader("Fatores de Risco Textuais")
+            for f in report.risk_factors:
+                st.warning(f"Indicador: {f}")
+
+        if alerts:
+            st.subheader("Alertas Gerados")
+            for a in alerts:
+                st.warning(f"[{a.risk_level.upper()}] {a.evidence}")
 
 with tab4:
     st.header("Monitoramento de Sinais Vitais")
     st.markdown("Detecção de anomalias em sinais vitais com Isolation Forest e Z-Score.")
 
-    col1, col2 = st.columns(2)
+    is_gestational_v = st.checkbox("Faixas gestacionais", value=False, key="gest_vitals")
+
+    col1, col2, col3 = st.columns(3)
 
     with col1:
-        signal_type = st.selectbox(
-            "Tipo de Sinal",
-            [
-                "pressao_sistolica", "pressao_diastolica",
-                "batimentos_fetais", "batimentos_maternos",
-                "temperatura", "saturacao_oxigenio",
-                "nivel_hormonal", "glicose",
-            ],
-        )
-        value = st.number_input("Valor", value=120.0, step=0.1)
+        vs_pressao_sis = st.number_input("Pressão Sistólica", value=0.0, step=0.1, help="mmHg", key="vs_ps")
+        vs_pressao_dia = st.number_input("Pressão Diastólica", value=0.0, step=0.1, help="mmHg", key="vs_pd")
+        vs_temp = st.number_input("Temperatura", value=0.0, step=0.1, help="°C", key="vs_tp")
 
     with col2:
-        unit = st.text_input("Unidade", value="mmHg")
-        is_gestational = st.checkbox("Faixas gestacionais", value=False)
+        vs_fetal_hr = st.number_input("Bat. Fetais", value=0.0, step=1.0, help="bpm", key="vs_fh")
+        vs_maternal_hr = st.number_input("Bat. Maternos", value=0.0, step=1.0, help="bpm", key="vs_mh")
+        vs_o2 = st.number_input("Saturação O₂", value=0.0, step=0.1, help="%", key="vs_o2")
 
-    if st.button("Verificar Sinal Vital", type="primary"):
+    with col3:
+        vs_glucose = st.number_input("Glicose", value=0.0, step=1.0, help="mg/dL", key="vs_gl")
+        vs_hormone = st.number_input("Nível Hormonal", value=0.0, step=0.1, help="Z-score", key="vs_nh")
+        vs_weight = st.number_input("Peso", value=0.0, step=0.1, help="kg", key="vs_wt")
+
+    if st.button("Verificar Sinais Vitais", type="primary"):
         from src.agents.anomaly_agent import (
             AnomalyDetectionAgent,
             SignalType,
             VitalSignRecord,
         )
 
-        agent = AnomalyDetectionAgent(use_gestational_ranges=is_gestational)
-        record = VitalSignRecord(
-            timestamp=datetime.now().timestamp(),
-            signal_type=SignalType(signal_type),
-            value=value,
-            unit=unit,
-            patient_id="PAC-DEMO",
-        )
+        signals = [
+            ("pressao_sistolica", vs_pressao_sis, "mmHg"),
+            ("pressao_diastolica", vs_pressao_dia, "mmHg"),
+            ("batimentos_fetais", vs_fetal_hr, "bpm"),
+            ("batimentos_maternos", vs_maternal_hr, "bpm"),
+            ("temperatura", vs_temp, "°C"),
+            ("saturacao_oxigenio", vs_o2, "%"),
+            ("glicose", vs_glucose, "mg/dL"),
+            ("nivel_hormonal", vs_hormone, "Z-score"),
+            ("peso", vs_weight, "kg"),
+        ]
 
-        result = agent.add_record(record)
+        agent = AnomalyDetectionAgent(use_gestational_ranges=is_gestational_v)
+        results_output = []
 
-        if result:
-            if result.is_anomaly:
-                st.error(
-                    f"ANOMALIA DETECTADA! Score: {result.anomaly_score:.2f} "
-                    f"(Severidade: {result.severity.upper()})"
+        for sig_type, val, unit in signals:
+            if val > 0:
+                record = VitalSignRecord(
+                    timestamp=datetime.now().timestamp(),
+                    signal_type=SignalType(sig_type),
+                    value=float(val),
+                    unit=unit,
+                    patient_id="PAC-DEMO",
                 )
-            else:
-                st.success(f"Valor dentro do esperado. Score: {result.anomaly_score:.2f}")
+                result = agent.add_record(record)
+                if result:
+                    results_output.append(result)
 
-            st.metric(
-                "Desvio do esperado",
-                f"{result.deviation_from_expected:.2f}",
-                delta=f"Range: {result.expected_range}",
-            )
+        if results_output:
+            anomalies = [r for r in results_output if r.is_anomaly]
+            if anomalies:
+                st.error(f"{len(anomalies)} anomalia(s) detectada(s) em {len(results_output)} sinais!")
+                for r in anomalies:
+                    st.warning(
+                        f"**{r.record.signal_type.value}**: {r.record.value} {r.record.unit} "
+                        f"— score: {r.anomaly_score:.2f} [{r.severity.upper()}] "
+                        f"(range esperado: {r.expected_range})"
+                    )
+            else:
+                st.success(f"Todos os {len(results_output)} sinais dentro do esperado.")
+        else:
+            st.info("Preencha pelo menos um sinal vital com valor > 0.")
 
     st.markdown("---")
     st.subheader("Simular Série Temporal")
@@ -319,6 +496,12 @@ with tab4:
     noise_level = st.slider("Nível de ruído", 0.01, 0.5, 0.1)
 
     if st.button("Gerar e Analisar Série Temporal"):
+        from src.agents.anomaly_agent import (
+            AnomalyDetectionAgent,
+            SignalType,
+            VitalSignRecord,
+        )
+
         timestamps = np.linspace(0, 100, n_points)
         base_value = 120.0
         noise = np.random.normal(0, noise_level * 20, n_points)

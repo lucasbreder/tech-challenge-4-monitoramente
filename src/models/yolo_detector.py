@@ -12,6 +12,7 @@ Critérios do edital atendidos:
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -21,7 +22,25 @@ import numpy as np
 from loguru import logger
 from ultralytics import YOLO
 
-from src.config import settings
+from src.config import resolve_device, settings
+
+os.environ.setdefault("OPENCV_FFMPEG_LOGLEVEL", "-8")
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
+
+
+class _SuppressStderr:
+    def __enter__(self):
+        self._fd = os.dup(2)
+        self._null = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(self._null, 2)
+
+    def __exit__(self, *_):
+        if self._fd is not None:
+            os.dup2(self._fd, 2)
+            os.close(self._null)
+            self._fd = None
+
+_suppress = _SuppressStderr()
 
 SURGICAL_CLASSES = {
     0: "bisturi",
@@ -125,8 +144,9 @@ class YOLODetector:
         else:
             logger.warning(f"Modelo customizado não encontrado. Usando YOLOv8n base.")
             self._model = YOLO("yolov8n.pt")
-        self._model.to(settings.device)
-        logger.info(f"Modelo YOLOv8 carregado no dispositivo: {settings.device}")
+        device = resolve_device(settings.device)
+        self._model.to(device)
+        logger.info(f"Modelo YOLOv8 carregado no dispositivo: {device}")
 
     def process_frame(self, frame: np.ndarray, frame_number: int, fps: float) -> list[DetectionResult]:
         results = self.model.predict(
@@ -164,6 +184,7 @@ class YOLODetector:
         video_path: str | Path,
         sample_every_n_frames: int = 10,
         max_frames: int | None = None,
+        progress_callback: callable = None,
     ) -> VideoAnalysisReport:
         video_path = Path(video_path)
         if not video_path.exists():
@@ -191,8 +212,9 @@ class YOLODetector:
 
         with tqdm(total=frames_to_process, desc="Processando vídeo") as pbar:
             while frame_idx < frames_to_process:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-                ret, frame = cap.read()
+                with _suppress:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                    ret, frame = cap.read()
                 if not ret:
                     break
 
@@ -210,6 +232,8 @@ class YOLODetector:
 
                 frame_idx += 1
                 pbar.update(1)
+                if progress_callback:
+                    progress_callback(frame_idx, frames_to_process)
 
         cap.release()
         logger.info(
@@ -250,14 +274,15 @@ class YOLODetector:
             imgsz: Tamanho da imagem de entrada
             batch: Tamanho do batch
         """
-        logger.info(f"Iniciando fine-tuning do YOLOv8: epochs={epochs}, imgsz={imgsz}")
+        device = resolve_device(settings.device)
+        logger.info(f"Iniciando fine-tuning do YOLOv8: epochs={epochs}, imgsz={imgsz}, device={device}")
         model = YOLO(self.model_path)
         model.train(
             data=str(data_yaml),
             epochs=epochs,
             imgsz=imgsz,
             batch=batch,
-            device=settings.device,
+            device=device,
         )
         metrics = model.val()
         logger.info(f"Métricas de validação: mAP50={metrics.box.map50:.4f}, mAP50-95={metrics.box.map:.4f}")

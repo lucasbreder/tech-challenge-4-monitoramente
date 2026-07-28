@@ -14,10 +14,33 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
+from loguru import logger
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv()
+
+
+def resolve_device(requested: str = "cpu") -> str:
+    if requested == "cuda":
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return "cuda"
+        except ImportError:
+            pass
+        logger.warning("CUDA solicitado mas não disponível. Usando CPU.")
+        return "cpu"
+    if requested == "mps":
+        try:
+            import torch
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                return "mps"
+        except ImportError:
+            pass
+        logger.warning("MPS solicitado mas não disponível. Usando CPU.")
+        return "cpu"
+    return "cpu"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
@@ -46,7 +69,8 @@ class ModelConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    yolo_model_path: str = Field(default="yolov8n.pt", description="Caminho do modelo YOLOv8")
+    yolo_model_path: str = Field(default="yolov8n.pt", description="Caminho do modelo YOLOv8 treinado (.pt)")
+    yolo_config_path: str = Field(default="models/yolov8_config.yaml", description="Dataset YAML para fine-tuning")
     yolo_pretrained: bool = Field(default=True, description="Usar pesos pré-treinados no COCO")
     yolo_confidence_threshold: float = Field(default=0.45, description="Limiar de confiança para detecção")
     yolo_iou_threshold: float = Field(default=0.5, description="Limiar de IOU para NMS")

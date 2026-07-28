@@ -32,7 +32,26 @@ class AzureSpeechService:
 
     @property
     def is_available(self) -> bool:
-        return bool(self.key)
+        if not self.key or len(self.key) < 30:
+            return False
+        if "your_" in self.key.lower() or "sua_" in self.key.lower():
+            return False
+        return bool(self.key and self.region)
+
+    def _validate_connection(self) -> bool:
+        if not self.is_available:
+            return False
+        try:
+            import azure.cognitiveservices.speech as speechsdk
+            cfg = speechsdk.SpeechConfig(subscription=self.key, region=self.region)
+            cfg.speech_recognition_language = "pt-BR"
+            cfg.set_property(speechsdk.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "200")
+            recognizer = speechsdk.SpeechRecognizer(speech_config=cfg)
+            result = recognizer.recognize_once()
+            del recognizer
+            return True
+        except Exception:
+            return False
 
     def _get_config(self):
         if self._speech_config is None and self.is_available:
@@ -68,15 +87,27 @@ class AzureSpeechService:
             raise RuntimeError("Falha ao configurar Azure Speech")
 
         audio_config = speechsdk.audio.AudioConfig(filename=str(audio_path))
-        recognizer = speechsdk.SpeechRecognizer(
-            speech_config=speech_config, audio_config=audio_config
-        )
-
-        result = recognizer.recognize_once()
-        if result.reason == speechsdk.ResultReason.RecognizedSpeech:
-            return result.text
-        else:
-            logger.warning(f"Azure Speech: reconhecimento falhou ({result.reason})")
+        try:
+            recognizer = speechsdk.SpeechRecognizer(
+                speech_config=speech_config, audio_config=audio_config
+            )
+            result = recognizer.recognize_once()
+            if result.reason == speechsdk.ResultReason.RecognizedSpeech:
+                return result.text
+            elif result.reason == speechsdk.ResultReason.NoMatch:
+                logger.warning("Azure Speech: nenhum texto reconhecido no áudio")
+                return ""
+            elif result.reason == speechsdk.ResultReason.Canceled:
+                cancellation = speechsdk.CancellationDetails.from_result(result)
+                logger.warning(
+                    f"Azure Speech cancelado: {cancellation.reason} - {cancellation.error_details}"
+                )
+                return ""
+            else:
+                logger.warning(f"Azure Speech: resultado inesperado ({result.reason})")
+                return ""
+        except Exception as e:
+            logger.warning(f"Azure Speech: erro nativo - {e}")
             return ""
 
     def analyze_sentiment(self, text: str) -> dict:

@@ -98,6 +98,7 @@ class VideoAnalysisAgent:
         video_path: str | Path,
         video_type: VideoType = VideoType.CONSULTATION,
         sample_rate: int = 10,
+        progress_callback: callable = None,
     ) -> tuple[VideoAnalysisReport, list[AnomalyAlert]]:
         video_path = Path(video_path)
         logger.info(f"[VideoAgent] Analisando vídeo tipo '{video_type.value}': {video_path.name}")
@@ -105,6 +106,7 @@ class VideoAnalysisAgent:
         report = self.detector.analyze_video(
             video_path=video_path,
             sample_every_n_frames=sample_rate,
+            progress_callback=progress_callback,
         )
 
         alerts = self._generate_alerts(report, video_type)

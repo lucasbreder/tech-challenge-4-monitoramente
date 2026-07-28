@@ -34,7 +34,7 @@ from rich.panel import Panel
 from rich.table import Table
 from transformers import AutoModelForAudioClassification, AutoFeatureExtractor, pipeline
 
-from src.config import settings
+from src.config import resolve_device, settings
 
 console = Console()
 
@@ -174,29 +174,90 @@ class AudioPreprocessor:
 
 
 class SpeechToText:
-    """Transcrição de áudio usando OpenAI Whisper."""
+    """Transcrição de áudio usando Azure Speech (primário) ou OpenAI Whisper (fallback)."""
 
     def __init__(self, model_size: str | None = None, language: str | None = None):
         self.model_size = model_size or settings.model.whisper_model_size
         self.language = language or settings.model.whisper_language
         self._model = None
+        self._azure = None
+        self._provider = None
+        self._azure_attempted = False
 
     @property
     def model(self):
         if self._model is None:
-            #logger.info(f"🎙️ Carregando Whisper [cyan]{self.model_size}[/cyan] ({settings.device.upper()})...")
             self._model = whisper.load_model(self.model_size)
-            self._model.to(torch.device(settings.device))
+            self._model.to(torch.device(resolve_device(settings.device)))
         return self._model
 
+    @property
+    def provider(self) -> str:
+        if self._provider:
+            return self._provider
+        if self._azure_attempted:
+            return "whisper"
+
+        if settings.azure.speech_key and len(settings.azure.speech_key) > 30 \
+           and "your_" not in settings.azure.speech_key.lower():
+            try:
+                from src.services.azure_services import AzureSpeechService
+                svc = AzureSpeechService()
+                if svc.is_available:
+                    self._provider = "azure"
+                    self._azure = svc
+                    logger.info("Azure Speech Services configurado e disponível")
+                    return "azure"
+            except Exception as e:
+                logger.warning(f"Não foi possível inicializar Azure Speech: {e}")
+
+        self._azure_attempted = True
+        self._provider = "whisper"
+        logger.info("Usando Whisper local para transcrição")
+        return "whisper"
+
     def transcribe(self, audio_path: str | Path) -> AudioAnalysisReport:
-        """Transcreve áudio completo e detecta indicadores de risco no texto."""
         audio_path = Path(audio_path)
 
-        # Força fp16=False se estiver rodando em CPU para evitar avisos
-        use_fp16 = True if settings.device == "cuda" else False
+        if self.provider == "azure" and self._azure:
+            try:
+                logger.info("Usando Azure Speech Services para transcrição")
+                text = self._azure.transcribe(audio_path)
+                if text:
+                    segments: list[TranscriptionSegment] = []
+                    matched = [ind for ind in RISK_INDICATORS if ind in text.lower()]
+                    segments.append(TranscriptionSegment(
+                        start_seconds=0.0,
+                        end_seconds=0.0,
+                        text=text.strip(),
+                        confidence=1.0,
+                        has_risk_indicator=len(matched) > 0,
+                        matched_indicators=matched,
+                    ))
+                    logger.info("Azure Speech: transcrição concluída com sucesso")
+                    return AudioAnalysisReport(
+                        file_path=audio_path,
+                        duration_seconds=0.0,
+                        language=self.language,
+                        transcription=text.strip(),
+                        segments=segments,
+                        risk_factors=matched,
+                    )
+                logger.warning("Azure Speech: áudio sem fala detectável, usando Whisper")
+            except Exception:
+                logger.warning("Azure Speech indisponível, usando Whisper local")
+            finally:
+                self._provider = "whisper"
+                self._azure = None
 
-        result = self.model.transcribe(
+        logger.info(f"Usando Whisper {self.model_size} local para transcrição")
+        use_fp16 = True if resolve_device(settings.device) == "cuda" else False
+
+        model = self.model
+        if model is None:
+            raise RuntimeError("Falha ao carregar o modelo Whisper")
+
+        result = model.transcribe(
             str(audio_path),
             language=self.language,
             verbose=False,
@@ -251,16 +312,17 @@ class EmotionAnalyzer:
             #logger.info(f"🎭 Carregando modelo de emoção vocal: [cyan]{model_name}[/cyan]")
             self._feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
             self._model = AutoModelForAudioClassification.from_pretrained(model_name)
-            self._model.to(torch.device(settings.device))
+            self._model.to(torch.device(resolve_device(settings.device)))
             self._classifier = pipeline(
                 "audio-classification",
                 model=self._model,
                 feature_extractor=self._feature_extractor,
-                device=0 if settings.device == "cuda" else -1,
+                device=0 if resolve_device(settings.device) == "cuda" else -1,
             )
 
     def analyze_emotions(
-        self, audio: np.ndarray, sr: int, segment_duration: float = 3.0
+        self, audio: np.ndarray, sr: int, segment_duration: float = 3.0,
+        progress_callback: callable = None,
     ) -> list[EmotionSegment]:
         """Analisa emoções por segmentos do áudio."""
         self._ensure_loaded()
@@ -271,6 +333,8 @@ class EmotionAnalyzer:
         emotions: list[EmotionSegment] = []
 
         for i in range(total_segments):
+            if progress_callback:
+                progress_callback(i + 1, total_segments)
             start_sample = i * segment_samples
             end_sample = min(start_sample + segment_samples, len(audio))
             segment = audio[start_sample:end_sample]
@@ -297,7 +361,8 @@ class EmotionAnalyzer:
 
         return emotions
 
-    def compute_risk_score(self, emotions: list[EmotionSegment], has_text_risk: bool = False) -> tuple[float, str]:
+    def compute_risk_score(self, emotions: list[EmotionSegment], has_text_risk: bool = False,
+                           text_indicator_count: int = 0) -> tuple[float, str]:
         if not emotions:
             risk_score = 0.3 if has_text_risk else 0.0
         else:
@@ -309,9 +374,9 @@ class EmotionAnalyzer:
                 negative_score = sum(e.confidence for e in emotions if e.emotion in negative_emotions)
                 risk_score = negative_score / total_confidence
 
-        # Se houver gatilho de texto (ex: "violência", "socorro"), garante ao menos risco médio
-        if has_text_risk and risk_score < 0.3:
-            risk_score = 0.35
+        if has_text_risk:
+            text_boost = min(0.5, 0.15 + text_indicator_count * 0.05)
+            risk_score = max(risk_score, text_boost)
 
         if risk_score > 0.75:
             level = "crítico"
@@ -333,7 +398,7 @@ class AudioAnalyzer:
         self.transcriber = SpeechToText()
         self.emotion = EmotionAnalyzer()
 
-    def analyze(self, audio_path: str | Path) -> AudioAnalysisReport:
+    def analyze(self, audio_path: str | Path, progress_callback: callable = None) -> AudioAnalysisReport:
         audio_path = Path(audio_path)
         
         console.print(
@@ -350,10 +415,15 @@ class AudioAnalyzer:
 
         report = self.transcriber.transcribe(audio_path)
 
-        emotions = self.emotion.analyze_emotions(audio, sr)
+        emotions = self.emotion.analyze_emotions(audio, sr, progress_callback=progress_callback)
         report.emotions = emotions
 
-        risk_score, risk_level = self.emotion.compute_risk_score(emotions)
+        has_text_risk = bool(report.risk_factors)
+        risk_score, risk_level = self.emotion.compute_risk_score(
+            emotions,
+            has_text_risk=has_text_risk,
+            text_indicator_count=len(report.risk_factors),
+        )
 
         report.audio_features = features
         report.risk_score = risk_score
