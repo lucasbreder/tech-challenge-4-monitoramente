@@ -1,8 +1,8 @@
 task: detect
 mode: train
 model: yolov8n.pt
-data: models/yolov8_config.yaml
-epochs: 100
+data: data/dataset/unified/data.yaml
+epochs: 30
 time: null
 patience: 100
 batch: 8
@@ -10,7 +10,7 @@ imgsz: 640
 save: true
 save_period: -1
 cache: false
-device: cpu
+device: '0'
 workers: 8
 project: null
 name: train

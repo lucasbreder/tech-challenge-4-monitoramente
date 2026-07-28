@@ -1,379 +1,204 @@
-# 🏥 Sistema de Monitoramento Multimodal para Saúde da Mulher
+# Sistema de Monitoramento Multimodal para Saúde da Mulher
 
 **Fase 4 - Tech Challenge**
 
-Sistema de IA para análise e fusão de dados multimodais (vídeo, áudio e sinais vitais) com foco em detecção precoce de riscos em saúde materna e ginecológica, identificação de sinais de violência doméstica, monitoramento de bem-estar psicológico e alertas em tempo real para equipes médicas.
+Sistema de IA para análise e fusão de dados multimodais (vídeo, áudio e sinais vitais) com foco em detecção precoce de riscos em saúde materna e ginecológica.
 
 ---
 
-## Funcionalidades Principais
+## Funcionalidades
 
-### Análise de Vídeo Clínico
-- Detecção de sangramento anômalo em procedimentos ginecológicos
-- Identificação de instrumentos cirúrgicos e áreas críticas (útero, ovários, mamas)
-- Reconhecimento de expressões faciais de desconforto e medo
-- Triagem de objetos suspeitos indicativos de automutilação
-- **Modelo:** YOLOv8 customizado (com suporte a fine-tuning)
+### Análise de Vídeo
+- **YOLOv8**: modelo treinado em 11.474 imagens com 30 classes (sangramento, 21 instrumentos cirúrgicos, 8 expressões faciais)
+- **Azure AI Vision**: descrição de cena cirúrgica via API (captions e tags)
+- Modos: batch com relatório, live com bounding boxes, live com Azure Vision
 
-### Análise de Áudio de Consultas
-- Transcrição automática de consultas (português)
-- Detecção de emoções na voz (tristeza, medo, raiva, ansiedade)
-- Identificação de indicadores verbais de risco (violência, depressão, abuso)
-- Análise de hesitação e padrões de silêncio
-- **Modelos:** OpenAI Whisper + Wav2Vec2 (HuggingFace)
+### Análise de Áudio
+- **Azure Speech** (primário) + **Whisper** (fallback): transcrição em português
+- **Wav2Vec2**: detecção de emoções na voz (medo, tristeza, raiva, etc.)
+- Indicadores textuais de risco: depressão, ansiedade, violência doméstica
 
-### Monitoramento de Sinais Vitais
-- Detecção de anomalias em tempo real
+### Sinais Vitais
+- **Z-Score + Isolation Forest**: detecção de anomalias em 9 indicadores
 - Faixas de referência específicas para gestantes
-- Análise de prescrições hormonais
-- **Métodos:** Z-Score + Rolling Statistics + Isolation Forest
 
 ### Fusão Multimodal
-- Score de risco unificado (vídeo + áudio + sinais vitais)
-- Correlação de indicadores entre modalidades
+- Score unificado: 35% vídeo + 35% áudio + 30% sinais vitais
+- Correlação de riscos entre modalidades
 - Recomendações automáticas para equipe médica
 
-### Integração Azure
-- **Speech Services:** Transcrição e análise de sentimentos
-- **AI Vision:** Análise complementar de imagens médicas
-- **Blob Storage:** Armazenamento seguro e criptografado (LGPD)
-- **OpenAI:** Análise avançada de texto clínico
+### Infraestrutura
+- **Azure Storage**: upload automático de vídeos, áudios e relatórios
+- **Alertas por email**: HTML com scores, correlações e recomendações
+- **Streamlit**: interface web interativa com barras de progresso
 
 ---
 
-## Estrutura do Projeto
+## Estrutura
 
 ```
 tech-4/
-├── main.py                         # CLI principal (Typer) - ponto de entrada
-├── train.py                        # Script de fine-tuning do YOLOv8
-├── generate_dataset.py             # Gerador de dataset sintético para treino
-├── requirements.txt                # Dependências
-├── .env.example                    # Template de variáveis de ambiente
-├── .gitignore
-├── AGENTS.md                       # Arquitetura de agentes autônomos
-├── README.md                       # Este arquivo
+├── main.py                         # CLI (Typer): video, audio, multimodal, live, live-azure, demo
+├── train.py                        # Fine-tuning do YOLOv8
+├── generate_dataset.py             # Gerador de dataset sintético
+├── merge_datasets.py               # Unifica datasets Roboflow (blood + instruments + emotions)
+├── convert_obb_dataset.py          # Converte OBB → bbox YOLO
+├── download_surgical_model.py      # Download de modelo cirúrgico (Roboflow/HF)
+├── requirements.txt
+├── .env.example
+├── AGENTS.md                       # Arquitetura dos agentes
+├── README.md
 ├── VIDEO_SCRIPT.md                 # Roteiro do vídeo de demonstração
 ├── src/
 │   ├── config.py                   # Configuração centralizada (Pydantic)
 │   ├── app.py                      # Interface Streamlit
 │   ├── models/
-│   │   ├── yolo_detector.py        # Detector YOLOv8 customizado
-│   │   └── audio_analyzer.py       # Transcrição + análise emocional
+│   │   ├── yolo_detector.py        # YOLOv8: detecção, live, Azure live
+│   │   └── audio_analyzer.py       # Whisper + Wav2Vec2 + Azure Speech
 │   ├── agents/
-│   │   ├── video_agent.py          # Agente de análise de vídeo
-│   │   ├── audio_agent.py          # Agente de análise de áudio
+│   │   ├── video_agent.py          # Agente de vídeo
+│   │   ├── audio_agent.py          # Agente de áudio
 │   │   ├── anomaly_agent.py        # Agente de anomalias vitais
-│   │   └── fusion_agent.py         # Agente de fusão multimodal
+│   │   └── fusion_agent.py         # Fusão multimodal
 │   ├── pipelines/
-│   │   ├── video_pipeline.py       # Pipeline de vídeo
-│   │   ├── audio_pipeline.py       # Pipeline de áudio
-│   │   └── multimodal_pipeline.py  # Pipeline multimodal completo
+│   │   ├── video_pipeline.py
+│   │   ├── audio_pipeline.py
+│   │   └── multimodal_pipeline.py
 │   ├── services/
-│   │   ├── azure_services.py       # Azure Cognitive Services
-│   │   └── alert_service.py        # Sistema de alertas
+│   │   ├── azure_services.py       # Azure Speech, Vision, Storage
+│   │   └── alert_service.py        # Email + JSON + Azure Storage
 │   └── utils/
-│       ├── file_handler.py         # Manipulação de arquivos
-│       └── report_generator.py     # Gerador de relatórios
+│       ├── file_handler.py
+│       └── report_generator.py
 ├── data/
 │   ├── videos/                     # Vídeos para análise
 │   ├── audios/                     # Áudios para análise
-│   ├── dataset/                    # Dataset de treino do YOLOv8
-│   │   ├── images/{train,val}/
-│   │   └── labels/{train,val}/
+│   ├── dataset/                    # Datasets de treino
+│   │   ├── blood/                  # 163 imagens — sangramento
+│   │   ├── surgery_instruments/    # 1.675 imagens — 21 instrumentos
+│   │   ├── emotions/               # 8.459 imagens — 8 emoções
+│   │   └── unified/                # Dataset unificado (11.474 img, 30 classes)
 │   └── reports/                    # Relatórios gerados
-│       └── alerts/                 # Logs de alertas
-├── tests/
-├── models/                         # Modelos treinados e config YAML
-│   └── yolov8_config.yaml          # Config do dataset para fine-tuning
-├── notebooks/                      # Jupyter notebooks
-└── edital/
-    └── fase-4-edital.md
+├── models/
+│   └── yolov8_custom.pt            # Modelo treinado
+└── tests/
 ```
-
----
-
-## Requisitos
-
-- Python 3.10+
-- CUDA 11.8+ (opcional — fallback automático para CPU)
-- Chaves Azure (opcional, para serviços cloud)
 
 ---
 
 ## Instalação
 
-### 1. Clone o repositório
-
-```bash
-git clone <url-do-repositorio>
-cd tech-4
-```
-
-### 2. Crie o ambiente virtual
-
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate    # Linux/Mac
-# ou
-.venv\Scripts\activate       # Windows
-```
-
-### 3. Instale as dependências
-
-```bash
+source .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env
+# Edite .env com suas chaves
 ```
 
-### 4. Configure as variáveis de ambiente
+---
+
+## Treinamento do Modelo
+
+### Dataset unificado (30 classes)
 
 ```bash
-cp .env.example .env
+# 1. Unificar os 3 datasets
+python merge_datasets.py
+
+# 2. Treinar com augmentations para generalização cirúrgica
+python train.py --config data/dataset/unified/data.yaml --epochs 30 --batch 8
 ```
 
-Edite o arquivo `.env` com suas chaves:
+O modelo treinado é salvo em `models/yolov8_custom.pt`.
 
-```env
-# Dispositivo (cpu, cuda ou mps — fallback automático se indisponível)
-DEVICE=cpu
+### Métricas de validação (mAP50 = 0.84)
 
-# OpenAI Whisper (obrigatório para transcrição)
-OPENAI_API_KEY=sua_chave_aqui
-
-# Azure (opcional - habilita serviços cloud)
-AZURE_SPEECH_KEY=sua_chave_azure_speech
-AZURE_SPEECH_REGION=brazilsouth
-AZURE_VISION_KEY=sua_chave_azure_vision
-AZURE_VISION_ENDPOINT=https://seu-endpoint.cognitiveservices.azure.com/
-
-# Caminho do dataset para fine-tuning
-YOLO_CONFIG_PATH=models/yolov8_config.yaml
-
-# Alertas por email (opcional)
-ALERT_EMAIL_FROM=alertas@hospital.com
-ALERT_EMAIL_TO=equipe_medica@hospital.com
-ALERT_EMAIL_PASSWORD=sua_senha_app
-```
-
-> **Nota:** O `DEVICE` tem fallback automático. Se configurar `cuda` mas não tiver GPU,
-> o sistema emite um warning e executa em CPU.
+| Categoria | Classes | Melhor desempenho |
+|-----------|---------|-------------------|
+| Sangramento | 1 | mAP 0.59 |
+| Instrumentos | 21 | bisturi (0.99), tesoura (0.995), pinça (0.97) |
+| Emoções | 8 | medo (0.80), feliz (0.88), tristeza (0.70) |
 
 ---
 
 ## Uso
 
-### CLI (Linha de Comando)
+### CLI
 
 ```bash
-# Ver ajuda geral
-python main.py --help
+# Análise batch com relatório
+python main.py video data/videos/cesaria.mp4 --type cirurgia
 
-# Análise de vídeo cirúrgico
-python main.py video data/videos/cirurgia.mp4 --type cirurgia
+# Vídeo anotado com bounding boxes
+python main.py video data/videos/cesaria.mp4 --type cirurgia --annotate
 
-# Análise de áudio de consulta pós-parto
+# Live com YOLOv8 (bounding boxes em tempo real)
+python main.py live data/videos/cesaria.mp4 --conf 0.20
+
+# Live com Azure Vision (captions e tags)
+python main.py live-azure data/videos/cesaria.mp4
+python main.py live-azure data/videos/cesaria.mp4 --interval 2.0
+
+# Análise de áudio
 python main.py audio data/audios/consulta.wav --type pos_parto
 
-# Pipeline multimodal completo
-python main.py multimodal PAC-001 \
-    --video data/videos/consulta.mp4 \
-    --audio data/audios/consulta.wav \
-    --video-type consulta \
-    --audio-type ginecologica
+# Pipeline multimodal completo (vídeo + áudio + sinais vitais)
+python main.py multimodal PAC-001 --video video.mp4 --audio audio.wav
 
-# Interface Streamlit interativa
+# Interface Streamlit
 python main.py demo
 ```
 
-### Python API
+### Streamlit
 
-```python
-from src.pipelines.multimodal_pipeline import MultimodalPipeline
-
-pipeline = MultimodalPipeline()
-
-assessment = pipeline.run(
-    patient_id="PAC-001",
-    video_path="data/videos/consulta.mp4",
-    audio_path="data/audios/consulta.wav",
-    video_type="consulta",
-    consultation_type="ginecologica",
-)
-
-print(f"Score de risco: {assessment.overall_risk_score:.2f}")
-print(f"Nível: {assessment.overall_risk_level}")
-print(f"Recomendações: {assessment.recommendations}")
+```bash
+python main.py demo
 ```
 
-### Análise Individual
+4 abas: Pipeline Multimodal, Análise de Vídeo (com keyframes), Análise de Áudio (com progresso), Sinais Vitais.
 
-```python
-# Apenas vídeo
-from src.pipelines.video_pipeline import VideoPipeline
-from src.agents.video_agent import VideoType
-
-pipeline = VideoPipeline()
-report, alerts = pipeline.run("video.mp4", VideoType.SURGERY)
-
-# Apenas áudio
-from src.pipelines.audio_pipeline import AudioPipeline
-from src.agents.audio_agent import AudioConsultationType
-
-pipeline = AudioPipeline()
-report, alerts = pipeline.run("audio.wav", AudioConsultationType.POSTPARTUM)
-
-# Apenas sinais vitais
-from src.agents.anomaly_agent import AnomalyDetectionAgent, SignalType, VitalSignRecord
-
-agent = AnomalyDetectionAgent(use_gestational_ranges=True)
-record = VitalSignRecord(0.0, SignalType.FETAL_HEART_RATE, 175.0, "bpm", "PAC-001")
-result = agent.add_record(record)
-print(f"Anomalia: {result.is_anomaly}, Score: {result.anomaly_score:.2f}")
-```
+Sidebar: status Azure, bucket browser, configuração de email.
 
 ---
 
-## Tipos de Análise Suportados
+## Serviços Azure
 
-### Vídeos
-| Tipo | Descrição | Classes Detectadas |
-|------|-----------|-------------------|
-| `cirurgia` | Cirurgias ginecológicas | Sangramento, instrumentos, áreas críticas |
-| `consulta` | Consultas médicas | Expressões faciais, desconforto |
-| `fisioterapia` | Sessões de fisioterapia | Movimentos, postura |
-| `triagem_violencia` | Triagem de violência | Linguagem corporal, objetos suspeitos |
+| Serviço | Variável .env | Função |
+|---------|-------------|--------|
+| Speech | `AZURE_SPEECH_KEY` | Transcrição de áudio |
+| Vision | `AZURE_VISION_KEY` + `ENDPOINT` | Detecção de cena cirúrgica |
+| Storage | `AZURE_STORAGE_CONNECTION_STRING` | Upload de mídia e relatórios |
+| OpenAI | `AZURE_OPENAI_API_KEY` | Análise de sentimento |
 
-### Áudios
-| Tipo | Descrição | Indicadores |
-|------|-----------|-------------|
-| `ginecologica` | Consulta ginecológica | Hesitação, desconforto |
-| `pre_natal` | Acompanhamento pré-natal | Ansiedade gestacional |
-| `pos_parto` | Consulta pós-parto | Depressão pós-parto |
-| `vitima_violencia` | Atendimento a vítimas | Trauma vocal, medo |
+### Fallback automático
 
-### Sinais Vitais
-| Sinal | Unidade | Faixa Normal | Faixa Gestacional |
-|-------|---------|-------------|-------------------|
-| Pressão Sistólica | mmHg | 90-140 | 90-135 |
-| Pressão Diastólica | mmHg | 60-90 | 60-85 |
-| Batimentos Fetais | bpm | 110-160 | 120-160 |
-| Batimentos Maternos | bpm | 60-100 | 65-110 |
-| Temperatura | °C | 35.5-37.5 | 35.5-37.5 |
-| Saturação O2 | % | 95-100 | 95-100 |
-| Glicose | mg/dL | 70-140 | 70-130 |
+Todos os serviços Azure têm fallback para modelos locais quando indisponíveis:
+- Speech → Whisper local
+- Vision → YOLOv8 local
+- Storage → apenas arquivo local
 
 ---
 
-## Níveis de Risco e Alertas
+## Alertas por Email
+
+```env
+ALERT_EMAIL_SMTP_HOST=smtp.gmail.com
+ALERT_EMAIL_SMTP_PORT=587
+ALERT_EMAIL_FROM=alertas@hospital.com
+ALERT_EMAIL_TO=equipe_medica@hospital.com
+ALERT_EMAIL_PASSWORD=senha_app
+```
+
+Suporte a SSL (porta 465) e TLS (porta 587). Email HTML com scores, correlações e recomendações.
+
+---
+
+## Níveis de Risco
 
 | Nível | Score | Ação |
 |-------|-------|------|
-| **Crítico** | > 0.80 | Notificação imediata + protocolo de emergência |
-| **Alto** | > 0.60 | Alerta à equipe + avaliação em 24h |
-| **Médio** | > 0.30 | Notificação + agendamento na semana |
-| **Baixo** | ≤ 0.30 | Rotina normal |
-
-Alertas são enviados via:
-- **Email** (HTML formatado) para equipe médica
-- **JSON** (log estruturado) para integração com sistemas hospitalares
-- **Log** (console/arquivo) para monitoramento operacional
-
----
-
-## Relatórios
-
-Relatórios são gerados automaticamente em `data/reports/` nos formatos:
-
-- **JSON:** Estruturado para integração com sistemas (HL7/FHIR)
-- **Markdown:** Legível para documentação clínica e auditoria
-
-Tipos de relatório:
-- `video_report_*.json/md` - Análise de vídeo
-- `audio_report_*.json/md` - Análise de áudio
-- `fusion_report_*.json/md` - Fusão multimodal
-
----
-
-## Treinamento do YOLOv8
-
-### 1. Gerar dataset sintético (para testes)
-
-```bash
-# Gera 100 imagens de treino + 30 de validação com as 15 classes
-python generate_dataset.py
-
-# Ou com parâmetros customizados
-python generate_dataset.py --train 200 --val 50 --size 640
-```
-
-As imagens são geradas em `data/dataset/images/{train,val}/` com labels
-YOLO em `data/dataset/labels/{train,val}/`. As 15 classes incluem instrumentos
-cirúrgicos, sangramento, áreas críticas e expressões faciais.
-
-### 2. Treinar o modelo
-
-```bash
-# Usando o script dedicado (recomendado)
-python train.py --config models/yolov8_config.yaml --epochs 30 --batch 8
-
-# Com dataset próprio (substitua o YAML)
-python train.py --config meu_dataset.yaml --epochs 50 --batch 16
-```
-
-O modelo treinado é salvo automaticamente em `models/yolov8_custom.pt`.
-
-### 3. Treinar via Python API
-
-```python
-from src.models.yolo_detector import YOLODetector
-
-detector = YOLODetector()
-detector.finetune(
-    data_yaml="models/yolov8_config.yaml",
-    epochs=50,
-    imgsz=640,
-    batch=16,
-)
-```
-
-### Estrutura esperada do dataset
-
-```
-data/dataset/
-├── images/
-│   ├── train/          ← imagens de treino (.jpg/.png)
-│   └── val/            ← imagens de validação
-└── labels/
-    ├── train/          ← anotações YOLO (.txt, mesmo nome da imagem)
-    └── val/
-```
-
-Cada `.txt` de anotação segue o formato:
-```
-<class_id> <x_center> <y_center> <width> <height>
-```
-
----
-
-## Demo Streamlit
-
-A interface Streamlit oferece:
-
-- Upload interativo de vídeos e áudios
-- Visualização de resultados em tempo real
-- Simulação de séries temporais de sinais vitais
-- Dashboards com scores e alertas
-
-```bash
-streamlit run src/app.py
-# ou
-python main.py demo
-```
-
----
-
-## Licença
-
-Este projeto é parte do Tech Challenge Fase 4 - FIAP.
-
----
+| Crítico | > 0.80 | Email URGENTE + protocolo de emergência |
+| Alto | > 0.60 | Email de alerta + avaliação em 24h |
+| Médio | > 0.30 | Notificação + agendamento |
+| Baixo | ≤ 0.30 | Rotina normal |

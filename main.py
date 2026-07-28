@@ -99,6 +99,39 @@ def audio(
 
 
 @app.command()
+def live(
+    video_path: str = typer.Argument(..., help="Caminho do arquivo de vídeo"),
+    sample_rate: int = typer.Option(3, "--sample-rate", "-s", help="Detectar a cada N frames"),
+    confidence: float = typer.Option(0.20, "--conf", "-c", help="Limiar de confiança (0-1)"),
+):
+    """Detecção em tempo real com bounding boxes sobrepostos."""
+    from src.models.yolo_detector import YOLODetector
+
+    print_banner()
+    console.print(f"\n[bold]Modo Live:[/bold] {video_path}")
+    console.print(f"[dim]Confiança: {confidence} | ESPAÇO = pausar | Q = sair[/dim]\n")
+
+    detector = YOLODetector(confidence_threshold=confidence)
+    detector.live_detect(video_path, sample_every_n_frames=sample_rate)
+
+
+@app.command()
+def live_azure(
+    video_path: str = typer.Argument(..., help="Caminho do arquivo de vídeo"),
+    interval: float = typer.Option(1.0, "--interval", "-i", help="Intervalo entre chamadas Azure (segundos)"),
+):
+    """Modo live com Azure Vision: sobrepõe captions e tags no vídeo."""
+    from src.models.yolo_detector import YOLODetector
+
+    print_banner()
+    console.print(f"\n[bold]Azure Vision Live:[/bold] {video_path}")
+    console.print(f"[dim]Atualiza a cada {interval}s | ESPAÇO = pausar | Q = sair[/dim]\n")
+
+    detector = YOLODetector()
+    detector.azure_live_detect(video_path, interval_seconds=interval)
+
+
+@app.command()
 def multimodal(
     patient_id: str = typer.Argument(..., help="ID da paciente"),
     video_path: Optional[str] = typer.Option(None, "--video", "-v", help="Caminho do vídeo"),
