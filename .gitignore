@@ -28,7 +28,6 @@ env/
 Thumbs.db
 
 # Modelos treinados (pesados)
-models/*.pt
 models/*.pkl
 models/*.onnx
 models/*.h5
